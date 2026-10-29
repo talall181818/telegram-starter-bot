@@ -1,21 +1,18 @@
-// 
-export function registerCommands(bot) {
+// export function registerCommands(bot) {
   bot.command("start", (ctx) => {
-    return ctx.reply(
-      "أهلًا بك في Masaad 🤖\nبوت إشارات ExpertOption قيد التجهيز."
-    );
+    return ctx.reply("أهلًا بك في Masaad 🤖");
   });
 
   bot.command("help", (ctx) => {
     return ctx.reply(
-      "📊 Masaad\n\n" +
-      "الأسواق: العملات والذهب والبيتكوين.\n" +
-      "الفريم: دقيقة واحدة.\n\n" +
-      "تنبيه: إشارات التداول الفعلية لم تُربط ببيانات السوق بعد."
+      "Masaad\n" +
+      "الأسواق: العملات والذهب والبيتكوين\n" +
+      "الفريم: دقيقة واحدة\n" +
+      "إشارات السوق الحقيقية لم تُربط بعد."
     );
   });
 
   bot.command("ping", (ctx) => {
-    return ctx.reply("البوت يعمل ✅");
+    return ctx.reply("البوت يعمل");
   });
 }
