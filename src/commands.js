@@ -1,10 +1,8 @@
 // import { InlineKeyboard } from "grammy";
-
 export function registerCommands(bot) {
   bot.command("start", (ctx) =>
     ctx.reply("أهلًا بك في Masaad 🤖\nبوت إشارات ExpertOption قيد التجهيز.")
   );
-
   bot.command("help", (ctx) =>
     ctx.reply(
       "📊 Masaad\n\n" +
