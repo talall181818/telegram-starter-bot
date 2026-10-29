@@ -1,4 +1,3 @@
-
 export function registerCommands(bot) {
   bot.command("start", async (ctx) => {
     await ctx.reply(
