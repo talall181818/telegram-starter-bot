@@ -1,4 +1,4 @@
-//export function registerCommands(bot) {
+{
 bot.command("start", async (ctx) => {
 await ctx.reply(“أهلًا بك في Masaad 🤖\nأرسل /gold للذهب أو /eurusd لليورو”);
 });
