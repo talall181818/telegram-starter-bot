@@ -1,18 +1,19 @@
-// export function registerCommands(bot) {
-  bot.command("start", (ctx) => {
-    return ctx.reply("أهلًا بك في Masaad 🤖");
+export function registerCommands(bot) {
+  bot.command("start", async (ctx) => {
+    await ctx.reply("أهلًا بك في بوت Masaad 🤖");
   });
 
-  bot.command("help", (ctx) => {
-    return ctx.reply(
-      "Masaad\n" +
+  bot.command("help", async (ctx) => {
+    await ctx.reply(
+      "Masaad - بوت ExpertOption\n\n" +
       "الأسواق: العملات والذهب والبيتكوين\n" +
       "الفريم: دقيقة واحدة\n" +
-      "إشارات السوق الحقيقية لم تُربط بعد."
+      "إشارات السوق الحقيقية غير مفعّلة بعد."
     );
   });
 
-  bot.command("ping", (ctx) => {
-    return ctx.reply("البوت يعمل");
+  bot.command("ping", async (ctx) => {
+    await ctx.reply("البوت يعمل ✅");
   });
 }
+  
