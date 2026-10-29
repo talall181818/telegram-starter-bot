@@ -58,3 +58,28 @@ async function analyze(ctx, symbol, name) {
     await ctx.reply("تعذر جلب بيانات " + name + " الآن.");
   }
 }
+const data = await response.json();
+const bid = Number(data.bid);
+const ask = Number(data.ask);
+const change = Number(data.dayDiffPercent);
+
+if (!Number.isFinite(bid) || !Number.isFinite(ask)) {
+  throw new Error("Invalid price data");
+}
+
+let trend = "متذبذب";
+if (data.direction === "UP") trend = "صاعد يوميًا";
+if (data.direction === "DOWN") trend = "هابط يوميًا";
+
+await ctx.reply(
+  "📊 " + name + "\n" +
+  "سعر الشراء: " + ask + "\n" +
+  "سعر البيع: " + bid + "\n" +
+  "الاتجاه اليومي: " + trend + "\n" +
+  "التغير اليومي: " +
+  (Number.isFinite(change) ? change.toFixed(3) + "%" : "غير متاح") +
+  "\n\n📌 إشارة الدقيقة: انتظار\n" +
+  "السبب: نحتاج بيانات حركة متتابعة لتحديد دخول محتمل.\n" +
+  "⏱️ مدة الصفقة: دقيقة واحدة\n" +
+  "⚠️ الاتجاه اليومي ليس إشارة مؤكدة للدقيقة."
+);
