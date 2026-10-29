@@ -1,42 +1,57 @@
 export function registerCommands(bot) {
   bot.command("start", async (ctx) => {
     await ctx.reply(
-      "أهلًا بك في Masaad 🤖\n" +
-      "بوت متابعة الأسواق"
+      "أهلًا بك في Masaad 🤖\n\n" +
+      "اختر السوق:\n" +
+      "/eurusd - اليورو مقابل الدولار\n" +
+      "/gold - الذهب\n\n" +
+      "مدة الصفقة: دقيقة واحدة"
     );
   });
 
-  bot.command("price", async (ctx) => {
-    try {
-      const response = await fetch(
-        "https://biquote.io/api/EURUSD"
-      );
+  bot.command("eurusd", async (ctx) => {
+    await sendPrice(ctx, "EURUSD", "اليورو مقابل الدولار");
+  });
 
-      if (!response.ok) {
-        throw new Error("تعذر جلب السعر");
-      }
-
-      const data = await response.json();
-
-      await ctx.reply(
-        "📊 EUR/USD\n" +
-        "سعر الشراء: " + data.ask + "\n" +
-        "سعر البيع: " + data.bid
-      );
-    } catch (error) {
-      await ctx.reply("تعذر جلب السعر الآن، حاول لاحقًا.");
-    }
+  bot.command("gold", async (ctx) => {
+    await sendPrice(ctx, "XAUUSD", "الذهب");
   });
 
   bot.command("help", async (ctx) => {
     await ctx.reply(
-      "Masaad 📊\n\n" +
-      "أرسل /price لعرض سعر EUR/USD.\n" +
-      "هذا عرض للسعر فقط، وليس إشارة شراء أو بيع."
+      "أوامر Masaad:\n" +
+      "/eurusd - سعر اليورو\n" +
+      "/gold - سعر الذهب\n\n" +
+      "هذه أسعار السوق وليست إشارات شراء أو بيع."
     );
   });
 
   bot.command("ping", async (ctx) => {
     await ctx.reply("البوت يعمل ✅");
   });
+}
+
+async function sendPrice(ctx, symbol, name) {
+  try {
+    const response = await fetch(
+      "https://biquote.io/api/" + symbol
+    );
+
+    if (!response.ok) {
+      await ctx.reply("تعذر جلب سعر " + name + " الآن.");
+      return;
+    }
+
+    const data = await response.json();
+
+    await ctx.reply(
+      "📊 " + name + "\n" +
+      "سعر الشراء: " + data.ask + "\n" +
+      "سعر البيع: " + data.bid + "\n\n" +
+      "⏱️ مدة الصفقة المطلوبة: دقيقة واحدة\n" +
+      "⚠️ السعر وحده لا يحدد إشارة شراء أو بيع."
+    );
+  } catch (error) {
+    await ctx.reply("تعذر الاتصال ببيانات السوق. حاول لاحقًا.");
+  }
 }
