@@ -1,6 +1,10 @@
 export function registerCommands(bot) {
 bot.command(“start”, async (ctx) => {
-await ctx.reply(“أهلًا بك في Masaad 🤖\n\nأرسل /gold لتحليل الذهب\nأرسل /eurusd لتحليل اليورو”);
+await ctx.reply(
+“أهلًا بك في Masaad 🤖\n\n” +
+“أرسل /gold لتحليل الذهب\n” +
+“أرسل /eurusd لتحليل اليورو”
+);
 });
 
 bot.command(“gold”, async (ctx) => {
@@ -23,12 +27,17 @@ await ctx.reply(“البوت يعمل ✅”);
 async function analyze(ctx, symbol, name) {
 try {
 const response = await fetch(“https://biquote.io/api/” + symbol);
-if (!response.ok) throw new Error(“Price unavailable”);
 
+if (!response.ok) {
+  throw new Error("Market data unavailable");
+}
 const data = await response.json();
 const bid = Number(data.bid);
 const ask = Number(data.ask);
 const change = Number(data.dayDiffPercent);
+if (!Number.isFinite(bid) || !Number.isFinite(ask)) {
+  throw new Error("Invalid price data");
+}
 let trend = "متذبذب";
 if (data.direction === "UP") trend = "صاعد يوميًا";
 if (data.direction === "DOWN") trend = "هابط يوميًا";
