@@ -1,6 +1,15 @@
 
+export function registerCommands(bot) {
   bot.command("start", async (ctx) => {
-    await ctx.reply("أهلًا بك في Masaad 🤖\nأرسل /gold للذهب أو /eurusd لليورو");
+    await ctx.reply("أهلًا بك في Masaad 🤖\nأرسل /help للمساعدة");
+  });
+
+  bot.command("help", async (ctx) => {
+    await ctx.reply(
+      "🤖 Masaad\n\n" +
+      "/gold - تحليل الذهب\n" +
+      "/eurusd - تحليل اليورو دولار"
+    );
   });
 
   bot.command("gold", async (ctx) => {
@@ -18,23 +27,13 @@ async function analyze(ctx, symbol, name) {
     if (!response.ok) throw new Error("Price unavailable");
 
     const data = await response.json();
-    const bid = Number(data.bid);
-    const ask = Number(data.ask);
-    const change = Number(data.dayDiffPercent);
-
-    let trend = "متذبذب";
-    if (data.direction === "UP") trend = "صاعد يوميًا";
-    if (data.direction === "DOWN") trend = "هابط يوميًا";
 
     await ctx.reply(
       "📊 " + name + "\n" +
-      "سعر الشراء: " + ask + "\n" +
-      "سعر البيع: " + bid + "\n" +
-      "الاتجاه اليومي: " + trend + "\n" +
-      "التغير اليومي: " +
-      (Number.isFinite(change) ? change.toFixed(3) + "%" : "غير متاح") +
-      "\nإشارة الدقيقة: انتظار\n" +
-      "الاتجاه اليومي ليس إشارة مؤكدة للدقيقة."
+      "سعر الشراء: " + data.ask + "\n" +
+      "سعر البيع: " + data.bid + "\n" +
+      "إشارة الدقيقة: انتظار\n" +
+      "لا توجد إشارة مؤكدة حاليًا."
     );
   } catch (error) {
     await ctx.reply("تعذر جلب بيانات " + name + " الآن.");
