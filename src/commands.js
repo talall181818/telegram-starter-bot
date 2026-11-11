@@ -17,9 +17,11 @@ export function registerCommands(bot) {
 function ema(values, period) {
   const k = 2 / (period + 1);
   let result = values[0];
+
   for (let i = 1; i < values.length; i++) {
     result = values[i] * k + result * (1 - k);
   }
+
   return result;
 }
 
@@ -61,7 +63,9 @@ async function analyze(ctx, symbol, name) {
       close: Number(c.close)
     }));
 
-    if (candles.length < 25) throw new Error("Not enough candles");
+    if (candles.length < 25) {
+      throw new Error("Not enough candles");
+    }
 
     const closes = candles.map(c => c.close);
     const current = candles[candles.length - 1];
@@ -83,8 +87,11 @@ async function analyze(ctx, symbol, name) {
       current.close > support &&
       (current.close - support) / support <= 0.0015;
 
+    const earlyWarning = nearResistance || nearSupport;
+
     const bullishCandle = current.close > current.open;
     const bearishCandle = current.close < current.open;
+
     const upTrend = fast > slow;
     const downTrend = fast < slow;
 
@@ -120,13 +127,16 @@ async function analyze(ctx, symbol, name) {
       signal = "🟡 استعداد شراء - قرب المقاومة";
       direction = "ميل صاعد";
     } else if (
-      nearSupport && downTrend &&const earlyWarning = nearResistance || nearSupport;
-const warningText = earlyWarning ? "⚠️ تنبيه: السعر قريب من الدعم أو المقاومة" : "لا يوجد تنبيه مبكر";
+      nearSupport && downTrend &&
       momentum >= 32 && momentum <= 50 && bearishCandle
     ) {
       signal = "🟠 استعداد بيع - قرب الدعم";
       direction = "ميل هابط";
     }
+
+    const warningText = earlyWarning
+      ? "⚠️ تنبيه مبكر: السعر قريب من الدعم أو المقاومة"
+      : "لا يوجد تنبيه مبكر";
 
     await ctx.reply(
       `📊 تحليل ${name}\n\n` +
@@ -138,12 +148,16 @@ const warningText = earlyWarning ? "⚠️ تنبيه: السعر قريب من 
       `🔻 الدعم: ${support}\n\n` +
       `الاتجاه: ${direction}\n` +
       `الإشارة: ${signal}\n` +
-      `المدة: ${duration}\n\n` +
-      `⚠️ الاستعداد المبكر ليس اختراقاً مؤكداً.\n` +
-      `الإشارات تحليلية وليست ضماناً للربح.`
+      `المدة المقترحة: ${duration}\n\n` +
+      `${warningText}\n` +
+      `⚠️ الإشارات تحليلية وليست ضماناً للربح.`
     );
+
   } catch (error) {
     console.error("[analysis error]", error);
-    await ctx.reply("تعذر التحليل حاليًا. تحقق من البيانات ومفتاح API.");
+    await ctx.reply(
+      "تعذر التحليل حاليًا. تحقق من البيانات ومفتاح API."
+    );
   }
 }
+
