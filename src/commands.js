@@ -94,7 +94,8 @@ async function analyze(ctx, symbol, name) {
 
     const upTrend = fast > slow;
     const downTrend = fast < slow;
-
+const overbought = momentum >= 70;
+const oversold = momentum <= 30;
     const breakoutUp =
       previous.close <= resistance &&
       current.close > resistance &&
