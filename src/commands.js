@@ -1,4 +1,3 @@
-
 const API_KEY = process.env.TWELVEDATA_API_KEY;
 
 export function registerCommands(bot) {
@@ -126,5 +125,6 @@ async function analyze(ctx, symbol, name) {
     );
   }
 }
+
 
 
