@@ -120,7 +120,8 @@ async function analyze(ctx, symbol, name) {
       signal = "🟡 استعداد شراء - قرب المقاومة";
       direction = "ميل صاعد";
     } else if (
-      nearSupport && downTrend &&
+      nearSupport && downTrend &&const earlyWarning = nearResistance || nearSupport;
+const warningText = earlyWarning ? "⚠️ تنبيه: السعر قريب من الدعم أو المقاومة" : "لا يوجد تنبيه مبكر";
       momentum >= 32 && momentum <= 50 && bearishCandle
     ) {
       signal = "🟠 استعداد بيع - قرب الدعم";
