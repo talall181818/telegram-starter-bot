@@ -13,37 +13,42 @@ function ema(values, period) {
 }
 
 function calculateRSI(values, period = 14) {
+  if (values.length <= period) return 50;
+
   let gains = 0;
   let losses = 0;
 
-  for (let i = values.length - period; i < values.length; i++) {
+  for (let i = 1; i <= period; i++) {
     const change = values[i] - values[i - 1];
-
     if (change > 0) gains += change;
     else losses += Math.abs(change);
   }
 
-  if (losses === 0) return 100;
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
 
-  const rs = gains / Math.max(losses, 0.000000001);
+  for (let i = period + 1; i < values.length; i++) {
+    const change = values[i] - values[i - 1];
+    const gain = Math.max(change, 0);
+    const loss = Math.max(-change, 0);
+
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+
+  if (avgLoss === 0) return 100;
+
+  const rs = avgGain / avgLoss;
   return 100 - 100 / (1 + rs);
 }
 
+// استخراج القمم والقيعان من الشموع السابقة
 function getLevels(candles) {
-  const supports = [];
-  const resistances = [];
+  const highs = [];
+  const lows = [];
 
   for (let i = 2; i < candles.length - 2; i++) {
     const c = candles[i];
-
-    if (
-      c.low < candles[i - 1].low &&
-      c.low < candles[i - 2].low &&
-      c.low < candles[i + 1].low &&
-      c.low < candles[i + 2].low
-    ) {
-      supports.push(c.low);
-    }
 
     if (
       c.high > candles[i - 1].high &&
@@ -51,11 +56,20 @@ function getLevels(candles) {
       c.high > candles[i + 1].high &&
       c.high > candles[i + 2].high
     ) {
-      resistances.push(c.high);
+      highs.push(c.high);
+    }
+
+    if (
+      c.low < candles[i - 1].low &&
+      c.low < candles[i - 2].low &&
+      c.low < candles[i + 1].low &&
+      c.low < candles[i + 2].low
+    ) {
+      lows.push(c.low);
     }
   }
 
-  return { supports, resistances };
+  return { highs, lows };
 }
 
 function nearestLevel(levels, price, type) {
@@ -82,119 +96,99 @@ async function analyze(ctx, symbol, name) {
       "&interval=1min&outputsize=100&apikey=" + API_KEY;
 
     const response = await fetch(url);
-
-    if (!response.ok) {
-      return ctx.reply("⚠️ تعذر الاتصال بمصدر الأسعار. حاول لاحقًا.");
-    }
-
     const data = await response.json();
 
-    if (!data.values || data.values.length < 30) {
-      return ctx.reply("⚠️ البيانات غير كافية للتحليل.");
+    if (!response.ok || !data.values || data.values.length < 40) {
+      console.error("Twelve Data error:", data);
+      return ctx.reply("⚠️ البيانات غير متوفرة حاليًا. حاول لاحقًا.");
     }
 
-    const candles = data.values.slice(1).reverse().map(c => ({
-      open: Number(c.open),
-      high: Number(c.high),
-      low: Number(c.low),
-      close: Number(c.close)
-    }));
+    // حذف الشمعة الأحدث لاحتمال أنها لم تكتمل
+    const candles = data.values
+      .slice(1)
+      .reverse()
+      .map(c => ({
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close)
+      }));
 
     const prices = candles.map(c => c.close);
 
-    const last = candles[candles.length - 1];
+    const current = candles[candles.length - 1];
     const previous = candles[candles.length - 2];
 
-    const price = last.close;
+    const price = current.close;
     const ema9 = ema(prices.slice(-40), 9);
     const ema21 = ema(prices.slice(-60), 21);
     const rsi = calculateRSI(prices);
 
-    const { supports, resistances } =
-      getLevels(candles.slice(0, -2));
+    // المستويات مأخوذة من الشموع السابقة فقط
+    const { highs, lows } = getLevels(
+      candles.slice(0, -1)
+    );
 
-    const support = nearestLevel(supports, price, "support");
-    const resistance = nearestLevel(resistances, price, "resistance");
+    const resistance = nearestLevel(
+      highs,
+      previous.close,
+      "resistance"
+    );
 
-    const previousSupport =
-      nearestLevel(supports, previous.close, "support");
+    const support = nearestLevel(
+      lows,
+      previous.close,
+      "support"
+    );
 
-    const previousResistance =
-      nearestLevel(resistances, previous.close, "resistance");
-
-    const bullish = last.close > last.open;
-    const bearish = last.close < last.open;
+    const bullishCandle = current.close > current.open;
+    const bearishCandle = current.close < current.open;
 
     const upTrend = ema9 > ema21 && price > ema9;
     const downTrend = ema9 < ema21 && price < ema9;
 
     const pip = symbol === "XAU/USD" ? 0.01 : 0.0001;
-    const decimals = symbol === "XAU/USD" ? 2 : 5;
 
-    // اختراق المقاومة
+    // اختراق المقاومة بإغلاق شمعة مكتملة
     const breakoutUp =
-      previousResistance !== null &&
-      previous.close <= previousResistance &&
-      price > previousResistance &&
-      bullish;
-
-    // كسر الدعم
-    const breakoutDown =
-      previousSupport !== null &&
-      previous.close >= previousSupport &&
-      price < previousSupport &&
-      bearish;
-
-    // ارتداد من الدعم
-    const supportBounce =
-      support !== null &&
-      previous.low <= support + pip * 2 &&
-      price > support &&
-      bullish &&
-      price > previous.close;
-
-    // رفض من المقاومة
-    const resistanceReject =
       resistance !== null &&
-      previous.high >= resistance - pip * 2 &&
-      price < resistance &&
-      bearish &&
-      price < previous.close;
+      previous.close <= resistance &&
+      current.close > resistance + pip * 0.5 &&
+      bullishCandle;
 
-    const buySignal =
-      upTrend &&
-      rsi >= 52 &&
-      rsi <= 68 &&
-      (breakoutUp || supportBounce);
-
-    const sellSignal =
-      downTrend &&
-      rsi >= 32 &&
-      rsi <= 48 &&
-      (breakoutDown || resistanceReject);
+    // كسر الدعم بإغلاق شمعة مكتملة
+    const breakoutDown =
+      support !== null &&
+      previous.close >= support &&
+      current.close < support - pip * 0.5 &&
+      bearishCandle;
 
     let signal = "⏳ انتظار";
-    let duration = "لا توجد مدة";
+    let duration = "لا توجد مدة مقترحة";
 
-    if (buySignal) {
+    if (
+      breakoutUp &&
+      upTrend &&
+      rsi >= 50 &&
+      rsi <= 68
+    ) {
       signal = "🟢 شراء UP";
+      duration = rsi >= 58 ? "دقيقتان" : "دقيقة واحدة";
 
-      duration =
-        breakoutUp && rsi >= 58
-          ? "دقيقتان"
-          : "دقيقة واحدة";
-
-    } else if (sellSignal) {
+    } else if (
+      breakoutDown &&
+      downTrend &&
+      rsi >= 32 &&
+      rsi <= 50
+    ) {
       signal = "🔴 بيع DOWN";
-
-      duration =
-        breakoutDown && rsi <= 42
-          ? "دقيقتان"
-          : "دقيقة واحدة";
+      duration = rsi <= 42 ? "دقيقتان" : "دقيقة واحدة";
     }
 
+    const decimals = symbol === "XAU/USD" ? 2 : 5;
+
     const reply =
-      "📊 " + name + "\n\n" +
+      "📊 تحليل " + name + "\n\n" +
       "السعر: " + price.toFixed(decimals) + "\n\n" +
       "الإشارة: " + signal + "\n" +
       "المدة المقترحة: " + duration + "\n\n" +
