@@ -25,7 +25,7 @@ function calculateRSI(values, period = 14) {
 
   if (losses === 0) return 100;
 
-  const rs = (gains / period) / (losses / period);
+  const rs = gains / Math.max(losses, 0.000000001);
   return 100 - 100 / (1 + rs);
 }
 
@@ -41,14 +41,18 @@ function getLevels(candles) {
       c.low < candles[i - 2].low &&
       c.low < candles[i + 1].low &&
       c.low < candles[i + 2].low
-    ) supports.push(c.low);
+    ) {
+      supports.push(c.low);
+    }
 
     if (
       c.high > candles[i - 1].high &&
       c.high > candles[i - 2].high &&
       c.high > candles[i + 1].high &&
       c.high > candles[i + 2].high
-    ) resistances.push(c.high);
+    ) {
+      resistances.push(c.high);
+    }
   }
 
   return { supports, resistances };
@@ -69,7 +73,7 @@ function nearestLevel(levels, price, type) {
 async function analyze(ctx, symbol, name) {
   try {
     if (!API_KEY) {
-      return ctx.reply("⚠️ مفتاح Twelve Data غير موجود.");
+      return ctx.reply("⚠️ مفتاح TWELVEDATA_API_KEY غير موجود.");
     }
 
     const url =
@@ -78,10 +82,15 @@ async function analyze(ctx, symbol, name) {
       "&interval=1min&outputsize=100&apikey=" + API_KEY;
 
     const response = await fetch(url);
+
+    if (!response.ok) {
+      return ctx.reply("⚠️ تعذر الاتصال بمصدر الأسعار. حاول لاحقًا.");
+    }
+
     const data = await response.json();
 
     if (!data.values || data.values.length < 30) {
-      return ctx.reply("⚠️ البيانات غير كافية للتحليل حاليًا.");
+      return ctx.reply("⚠️ البيانات غير كافية للتحليل.");
     }
 
     const candles = data.values.slice(1).reverse().map(c => ({
@@ -92,9 +101,9 @@ async function analyze(ctx, symbol, name) {
     }));
 
     const prices = candles.map(c => c.close);
+
     const last = candles[candles.length - 1];
     const previous = candles[candles.length - 2];
-    const before = candles[candles.length - 3];
 
     const price = last.close;
     const ema9 = ema(prices.slice(-40), 9);
@@ -107,14 +116,11 @@ async function analyze(ctx, symbol, name) {
     const support = nearestLevel(supports, price, "support");
     const resistance = nearestLevel(resistances, price, "resistance");
 
-    const pip = symbol === "XAU/USD" ? 0.01 : 0.0001;
-    const decimals = symbol === "XAU/USD" ? 2 : 5;
+    const previousSupport =
+      nearestLevel(supports, previous.close, "support");
 
-    const supportDistance = support === null
-      ? null : (price - support) / pip;
-
-    const resistanceDistance = resistance === null
-      ? null : (resistance - price) / pip;
+    const previousResistance =
+      nearestLevel(resistances, previous.close, "resistance");
 
     const bullish = last.close > last.open;
     const bearish = last.close < last.open;
@@ -122,111 +128,76 @@ async function analyze(ctx, symbol, name) {
     const upTrend = ema9 > ema21 && price > ema9;
     const downTrend = ema9 < ema21 && price < ema9;
 
-    const nearSupport =
-      supportDistance !== null && supportDistance <= 3;
+    const pip = symbol === "XAU/USD" ? 0.01 : 0.0001;
+    const decimals = symbol === "XAU/USD" ? 2 : 5;
 
-    const nearResistance =
-      resistanceDistance !== null && resistanceDistance <= 3;
-
-    // اختراق المقاومة مع إغلاق فوقها
+    // اختراق المقاومة
     const breakoutUp =
-      resistance !== null &&
-      previous.close <= resistance &&
-      last.close > resistance &&
+      previousResistance !== null &&
+      previous.close <= previousResistance &&
+      price > previousResistance &&
       bullish;
 
-    // كسر الدعم مع إغلاق تحته
+    // كسر الدعم
     const breakoutDown =
-      support !== null &&
-      previous.close >= support &&
-      last.close < support &&
+      previousSupport !== null &&
+      previous.close >= previousSupport &&
+      price < previousSupport &&
       bearish;
 
     // ارتداد من الدعم
     const supportBounce =
       support !== null &&
-      before.low <= support + pip * 2 &&
-      last.close > support &&
-      bullish;
+      previous.low <= support + pip * 2 &&
+      price > support &&
+      bullish &&
+      price > previous.close;
 
-    // رفض السعر من المقاومة
+    // رفض من المقاومة
     const resistanceReject =
       resistance !== null &&
-      before.high >= resistance - pip * 2 &&
-      last.close < resistance &&
-      bearish;
+      previous.high >= resistance - pip * 2 &&
+      price < resistance &&
+      bearish &&
+      price < previous.close;
 
-    let signal = "⏳ انتظار";
-    let direction = "غير مؤكد";
-    let duration = "لا توجد مدة مقترحة";
-    let reason = "ننتظر تأكيد الحركة قبل الدخول.";
-
-    const buyConfirmed =
+    const buySignal =
       upTrend &&
-      rsi >= 50 &&
-      rsi <= 70 &&
-      bullish &&
+      rsi >= 52 &&
+      rsi <= 68 &&
       (breakoutUp || supportBounce);
 
-    const sellConfirmed =
+    const sellSignal =
       downTrend &&
-      rsi >= 30 &&
-      rsi <= 50 &&
-      bearish &&
+      rsi >= 32 &&
+      rsi <= 48 &&
       (breakoutDown || resistanceReject);
 
-    if (breakoutUp && buyConfirmed) {
+    let signal = "⏳ انتظار";
+    let duration = "لا توجد مدة";
+
+    if (buySignal) {
       signal = "🟢 شراء UP";
-      direction = "صاعد";
-      duration = "دقيقة واحدة";
-      reason = "اختراق المقاومة بإغلاق صاعد وتوافق المؤشرات.";
-    } else if (supportBounce && buyConfirmed) {
-      signal = "🟢 شراء UP";
-      direction = "صاعد";
-      duration = "دقيقة واحدة";
-      reason = "ارتداد صاعد من الدعم مع تأكيد الاتجاه.";
-    } else if (breakoutDown && sellConfirmed) {
+
+      duration =
+        breakoutUp && rsi >= 58
+          ? "دقيقتان"
+          : "دقيقة واحدة";
+
+    } else if (sellSignal) {
       signal = "🔴 بيع DOWN";
-      direction = "هابط";
-      duration = "دقيقتان";
-      reason = "كسر الدعم بإغلاق هابط وتوافق المؤشرات.";
-    } else if (resistanceReject && sellConfirmed) {
-      signal = "🔴 بيع DOWN";
-      direction = "هابط";
-      duration = "دقيقتان";
-      reason = "رفض السعر من المقاومة مع تأكيد الاتجاه الهابط.";
-    } else if (nearResistance) {
-      reason = "السعر قريب من المقاومة؛ انتظر اختراقًا مؤكدًا أو ارتدادًا.";
-    } else if (nearSupport) {
-      reason = "السعر قريب من الدعم؛ انتظر ارتدادًا مؤكدًا أو كسرًا.";
-    } else if (upTrend) {
-      reason = "الميل صاعد لكن لا يوجد اختراق أو ارتداد مكتمل.";
-    } else if (downTrend) {
-      reason = "الميل هابط لكن لا يوجد كسر أو رفض مكتمل.";
-    } else {
-      reason = "الاتجاه غير واضح؛ ننتظر فرصة أفضل.";
+
+      duration =
+        breakoutDown && rsi <= 42
+          ? "دقيقتان"
+          : "دقيقة واحدة";
     }
 
-    const fmt = n =>
-      n === null ? "غير متوفر" : n.toFixed(decimals);
-
     const reply =
-      "📊 تحليل " + name + "\n\n" +
-      "⏱ فريم التحليل: دقيقة واحدة (1M)\n\n" +
-      "السعر: " + fmt(price) + "\n" +
-      "EMA 9: " + fmt(ema9) + "\n" +
-      "EMA 21: " + fmt(ema21) + "\n" +
-      "RSI: " + rsi.toFixed(2) + "\n\n" +
-      "🔺 أقرب مقاومة: " + fmt(resistance) +
-      (resistanceDistance === null ? "" :
-        " (يبعد " + resistanceDistance.toFixed(1) + " بيب)") + "\n" +
-      "🔻 أقرب دعم: " + fmt(support) +
-      (supportDistance === null ? "" :
-        " (يبعد " + supportDistance.toFixed(1) + " بيب)") + "\n\n" +
-      "الاتجاه: " + direction + "\n" +
+      "📊 " + name + "\n\n" +
+      "السعر: " + price.toFixed(decimals) + "\n\n" +
       "الإشارة: " + signal + "\n" +
       "المدة المقترحة: " + duration + "\n\n" +
-      "💡 سبب القرار: " + reason + "\n\n" +
       "⚠️ الإشارات تحليلية وليست ضمانًا للربح.";
 
     return ctx.reply(reply);
