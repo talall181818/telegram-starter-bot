@@ -34,7 +34,8 @@ function ema(values, period) {
   let result = values[0];
 
   for (let i = 1; i < values.length; i++) {
-    result = values[i] * multiplier +
+    result =
+      values[i] * multiplier +
       result * (1 - multiplier);
   }
 
@@ -58,7 +59,7 @@ function calculateRSI(values, period = 14) {
   if (averageLoss === 0) return 100;
 
   const rs = averageGain / averageLoss;
-  return 100 - (100 / (1 + rs));
+  return 100 - 100 / (1 + rs);
 }
 
 function calculateATR(candles) {
@@ -81,110 +82,96 @@ function calculateATR(candles) {
     Math.max(ranges.length, 1);
 }
 
-// تجميع القمم والقيعان المتقاربة في مستويات واحدة
-function clusterLevels(prices, candles, tolerance, type) {
-  const sorted = [...prices].sort((a, b) => a - b);
+// تجميع القمم والقيعان المتقاربة
+function makeClusters(pivots, tolerance) {
+  const sorted = [...pivots].sort((a, b) => a.price - b.price);
   const clusters = [];
 
-  for (const price of sorted) {
+  for (const pivot of sorted) {
     let cluster = clusters.find(
-      item => Math.abs(item.average - price) <= tolerance
+      item => Math.abs(item.average - pivot.price) <= tolerance
     );
 
     if (!cluster) {
-      cluster = { prices: [], average: price };
+      cluster = {
+        prices: [],
+        average: pivot.price
+      };
       clusters.push(cluster);
     }
 
-    cluster.prices.push(price);
+    cluster.prices.push(pivot.price);
+
     cluster.average =
       cluster.prices.reduce((a, b) => a + b, 0) /
       cluster.prices.length;
   }
 
-  return clusters.map(cluster => {
-    const touches = candles.filter(candle => {
-      const value = type === "resistance"
-        ? candle.high
-        : candle.low;
-
-      return Math.abs(value - cluster.average) <= tolerance;
-    }).length;
-
-    return {
-      price: cluster.average,
-      touches,
-      pivots: cluster.prices.length
-    };
-  });
+  return clusters.map(cluster => ({
+    price: cluster.average,
+    touches: cluster.prices.length
+  }));
 }
 
-// استخراج المستويات القوية من الشموع السابقة
-function findStrongLevels(candles, currentPrice) {
+// البحث عن مستويات قوية من آخر 200 شمعة
+function findStrongLevels(candles, currentPrice, pip) {
   const atr = calculateATR(candles);
-  const tolerance = Math.max(atr * 0.20, 0.00001);
+  const tolerance = Math.max(atr * 0.25, pip * 1.5);
+  const minimumDistance = pip * 5;
 
   const highs = [];
   const lows = [];
 
-  for (let i = 2; i < candles.length - 2; i++) {
+  // قمة أو قاع محاط بثلاث شمعات من كل جهة
+  for (let i = 3; i < candles.length - 3; i++) {
     const high = candles[i].high;
     const low = candles[i].low;
 
-    if (
-      high >= candles[i - 1].high &&
-      high >= candles[i - 2].high &&
-      high >= candles[i + 1].high &&
-      high >= candles[i + 2].high
-    ) {
-      highs.push(high);
-    }
+    const left = candles.slice(i - 3, i);
+    const right = candles.slice(i + 1, i + 4);
 
-    if (
-      low <= candles[i - 1].low &&
-      low <= candles[i - 2].low &&
-      low <= candles[i + 1].low &&
-      low <= candles[i + 2].low
-    ) {
-      lows.push(low);
-    }
+    const isSwingHigh =
+      left.every(c => high > c.high) &&
+      right.every(c => high >= c.high);
+
+    const isSwingLow =
+      left.every(c => low < c.low) &&
+      right.every(c => low <= c.low);
+
+    if (isSwingHigh) highs.push({ price: high });
+    if (isSwingLow) lows.push({ price: low });
   }
 
-  const resistanceLevels = clusterLevels(
-    highs, candles, tolerance, "resistance"
+  const resistanceClusters = makeClusters(highs, tolerance);
+  const supportClusters = makeClusters(lows, tolerance);
+
+  // لا نقبل المستوى إلا إذا تكرر اختباره مرتين على الأقل
+  const resistances = resistanceClusters
+    .filter(level =>
+      level.touches >= 2 &&
+      level.price - currentPrice >= minimumDistance
+    );
+
+  const supports = supportClusters
+    .filter(level =>
+      level.touches >= 2 &&
+      currentPrice - level.price >= minimumDistance
+    );
+
+  // الأقوى أولاً، وعند تساوي القوة نختار الأقرب
+  resistances.sort((a, b) =>
+    b.touches - a.touches ||
+    (a.price - currentPrice) - (b.price - currentPrice)
   );
 
-  const supportLevels = clusterLevels(
-    lows, candles, tolerance, "support"
+  supports.sort((a, b) =>
+    b.touches - a.touches ||
+    (currentPrice - a.price) - (currentPrice - b.price)
   );
-
-  // المستويات التي تم اختبارها مرتين أو أكثر
-  const strongResistance = resistanceLevels
-    .filter(level =>
-      level.price > currentPrice && level.touches >= 2
-    )
-    .sort((a, b) => a.price - b.price);
-
-  const strongSupport = supportLevels
-    .filter(level =>
-      level.price < currentPrice && level.touches >= 2
-    )
-    .sort((a, b) => b.price - a.price);
-
-  // في حال عدم وجود مستوى متكرر، نستخدم أقرب قمة أو قاع واضح
-  const fallbackResistance = resistanceLevels
-    .filter(level => level.price > currentPrice)
-    .sort((a, b) => a.price - b.price);
-
-  const fallbackSupport = supportLevels
-    .filter(level => level.price < currentPrice)
-    .sort((a, b) => b.price - a.price);
 
   return {
-    resistance:
-      strongResistance[0] || fallbackResistance[0] || null,
-    support:
-      strongSupport[0] || fallbackSupport[0] || null
+    resistance: resistances[0] || null,
+    support: supports[0] || null
   };
 }
 
@@ -203,19 +190,20 @@ async function analyze(ctx, symbol, name) {
 
     url.searchParams.set("symbol", symbol);
     url.searchParams.set("interval", "1min");
-    url.searchParams.set("outputsize", "60");
+    url.searchParams.set("outputsize", "201");
+    url.searchParams.set("order", "desc");
     url.searchParams.set("apikey", API_KEY);
 
     const response = await fetch(url);
     const data = await response.json();
 
-    if (!data.values || data.values.length < 30) {
+    if (!response.ok || !data.values || data.values.length < 100) {
       throw new Error(data.message || "لا توجد بيانات كافية");
     }
 
-    // آخر 50 شمعة مكتملة، مرتبة من الأقدم إلى الأحدث
+    // استبعاد أحدث شمعة، ثم ترتيب الباقي من الأقدم للأحدث
     const candles = data.values
-      .slice(1, 51)
+      .slice(1, 201)
       .reverse()
       .map(item => ({
         open: Number(item.open),
@@ -234,37 +222,40 @@ async function analyze(ctx, symbol, name) {
     const ema21 = ema(prices, 21);
     const rsi = calculateRSI(prices);
 
+    const pip = symbol === "EUR/USD" ? 0.0001 : 0.01;
+    const decimals = symbol === "EUR/USD" ? 5 : 3;
+
     const upTrend = ema9 > ema21 && price > ema9;
     const downTrend = ema9 < ema21 && price < ema9;
 
-    // مستويات الاختراق تحسب من الشموع السابقة
+    // استخدام الشموع السابقة فقط في حساب المستويات
     const history = candles.slice(0, -1);
 
-    const signalLevels = findStrongLevels(
+    const levelsForDisplay = findStrongLevels(
       history,
-      previous.close
+      price,
+      pip
     );
 
-    // مستويات العرض تحسب بالنسبة للسعر الحالي
-    const displayLevels = findStrongLevels(
+    // مستويات الاختراق تحسب نسبة إلى إغلاق الشمعة السابقة
+    const levelsForSignal = findStrongLevels(
       history,
-      price
+      previous.close,
+      pip
     );
 
-    const pip = symbol === "EUR/USD" ? 0.0001 : 0.01;
-
-    const resistance = displayLevels.resistance;
-    const support = displayLevels.support;
+    const resistance = levelsForDisplay.resistance;
+    const support = levelsForDisplay.support;
 
     const breakoutUp =
-      signalLevels.resistance &&
-      previous.close <= signalLevels.resistance.price &&
-      current.close > signalLevels.resistance.price;
+      levelsForSignal.resistance &&
+      previous.close <= levelsForSignal.resistance.price &&
+      current.close > levelsForSignal.resistance.price + pip * 0.5;
 
     const breakoutDown =
-      signalLevels.support &&
-      previous.close >= signalLevels.support.price &&
-      current.close < signalLevels.support.price;
+      levelsForSignal.support &&
+      previous.close >= levelsForSignal.support.price &&
+      current.close < levelsForSignal.support.price - pip * 0.5;
 
     const bullishCandle = current.close > current.open;
     const bearishCandle = current.close < current.open;
@@ -296,28 +287,37 @@ async function analyze(ctx, symbol, name) {
       duration = "دقيقتان";
     }
 
-    const decimals = symbol === "EUR/USD" ? 5 : 3;
-
     const resistanceText = resistance
       ? resistance.price.toFixed(decimals) +
         " (يبعد " +
-        (Math.abs(resistance.price - price) / pip).toFixed(1) +
+        ((resistance.price - price) / pip).toFixed(1) +
         " نقطة، اختُبر " + resistance.touches + " مرات)"
-      : "لا يوجد مستوى مقاومة واضح";
+      : "لا توجد مقاومة قوية تبعد 5 نقاط أو أكثر";
 
     const supportText = support
       ? support.price.toFixed(decimals) +
         " (يبعد " +
-        (Math.abs(price - support.price) / pip).toFixed(1) +
+        ((price - support.price) / pip).toFixed(1) +
         " نقطة، اختُبر " + support.touches + " مرات)"
-      : "لا يوجد مستوى دعم واضح";
+      : "لا يوجد دعم قوي يبعد 5 نقاط أو أكثر";
 
     let warning = "";
 
-    if (resistance && resistance.price - price <= pip * 3) {
-      warning = "\n\n⚠️ السعر قريب من المقاومة";
-    } else if (support && price - support.price <= pip * 3) {
-      warning = "\n\n⚠️ السعر قريب من الدعم";
+    if (resistance && support) {
+      const resistanceDistance = resistance.price - price;
+      const supportDistance = price - support.price;
+
+      if (resistanceDistance < supportDistance) {
+        warning = "\n\n⚠️ السعر أقرب إلى المقاومة";
+      } else {
+        warning = "\n\n⚠️ السعر أقرب إلى الدعم";
+      }
+    } else if (resistance) {
+      warning = "\n\n⚠️ توجد مقاومة قوية أعلى السعر";
+    } else if (support) {
+      warning = "\n\n⚠️ يوجد دعم قوي أسفل السعر";
+    } else {
+      warning = "\n\n⚠️ لم يتم العثور على مستويات قوية كافية";
     }
 
     const message =
@@ -342,8 +342,7 @@ async function analyze(ctx, symbol, name) {
 
     await ctx.reply(
       "⚠️ تعذر تحليل " + name +
-      "\nتأكد من مفتاح Twelve Data والبيانات."
+      "\nالسبب: " + error.message
     );
   }
 }
-
