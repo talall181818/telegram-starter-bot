@@ -3,7 +3,11 @@ const API_KEY = process.env.TWELVEDATA_API_KEY;
 
 export function registerCommands(bot) {
   bot.command("start", ctx =>
-    ctx.reply("أهلاً بك في Masaad 🤖\nتحليل الذهب واليورو دولار.\nأرسل /help")
+    ctx.reply(
+      "أهلاً بك في Masaad 🤖\n" +
+      "تحليل الذهب واليورو دولار.\n" +
+      "أرسل /help"
+    )
   );
 
   bot.command("help", ctx =>
@@ -40,12 +44,12 @@ function rsi(values, period = 14) {
     else losses -= change;
   }
 
-  if (losses === 0) return 100;
+  if (losses === 0) return gains === 0 ? 50 : 100;
 
   return 100 - 100 / (1 + gains / losses);
 }
 
-// البحث عن أقرب دعم ومقاومة
+// أقرب دعم ومقاومة
 function findLevels(candles, reference) {
   const resistanceCandidates = [];
   const supportCandidates = [];
@@ -70,7 +74,6 @@ function findLevels(candles, reference) {
     }
   }
 
-  // بديل عند عدم وجود قمة أو قاع واضح
   if (resistanceCandidates.length === 0) {
     for (const c of candles) {
       if (c.high > reference) resistanceCandidates.push(c.high);
@@ -96,7 +99,9 @@ function findLevels(candles, reference) {
 
 async function analyze(ctx, symbol, name) {
   try {
-    if (!API_KEY) throw new Error("API key missing");
+    if (!API_KEY) {
+      throw new Error("API key missing");
+    }
 
     const url = new URL(
       "https://api.twelvedata.com/time_series"
@@ -121,11 +126,20 @@ async function analyze(ctx, symbol, name) {
       close: Number(c.close)
     }));
 
-    if (candles.length < 25) {
-      throw new Error("Not enough candles");
+    if (
+      candles.length < 25 ||
+      candles.some(c =>
+        !Number.isFinite(c.open) ||
+        !Number.isFinite(c.high) ||
+        !Number.isFinite(c.low) ||
+        !Number.isFinite(c.close)
+      )
+    ) {
+      throw new Error("Not enough valid candles");
     }
 
     const closes = candles.map(c => c.close);
+
     const current = candles[candles.length - 1];
     const previous = candles[candles.length - 2];
 
@@ -133,7 +147,7 @@ async function analyze(ctx, symbol, name) {
     const slow = ema(closes, 21);
     const momentum = rsi(closes);
 
-    // آخر 30 شمعة مكتملة قبل الشمعة الحالية
+    // آخر 30 شمعة قبل الشمعة الحالية
     const history = candles.slice(-31, -1);
 
     const levels = findLevels(history, previous.close);
@@ -145,19 +159,11 @@ async function analyze(ctx, symbol, name) {
 
     const resistanceDistance = resistance === null
       ? null
-      : Math.abs(resistance - current.close) / pip;
+      : (resistance - current.close) / pip;
 
     const supportDistance = support === null
       ? null
-      : Math.abs(current.close - support) / pip;
-
-    const nearResistance =
-      resistanceDistance !== null &&
-      resistanceDistance <= 5;
-
-    const nearSupport =
-      supportDistance !== null &&
-      supportDistance <= 5;
+      : (current.close - support) / pip;
 
     const bullishCandle = current.close > current.open;
     const bearishCandle = current.close < current.open;
@@ -177,65 +183,61 @@ async function analyze(ctx, symbol, name) {
       current.close < support &&
       bearishCandle;
 
+    // لا توجد إشارات استعداد
     let signal = "⏳ انتظار";
     let direction = "غير مؤكد";
-    let duration = "لا توجد مدة مقترحة";
+    let duration = "لا توجد مدة";
 
-    // اختيار المدة حسب قوة الزخم
+    // شراء عند توافق جميع الشروط
     if (
       breakoutUp &&
       upTrend &&
       momentum >= 50 &&
-      momentum < 70
+      momentum < 70 &&
+      bullishCandle
     ) {
-      signal = "🟢 شراء UP - اختراق مؤكد";
+      signal = "🟢 شراء UP";
       direction = "صاعد";
+
       duration = momentum >= 60
         ? "دقيقة واحدة"
         : "دقيقتان";
-    } else if (
+    }
+
+    // بيع عند توافق جميع الشروط
+    else if (
       breakoutDown &&
       downTrend &&
       momentum > 30 &&
-      momentum <= 50
+      momentum <= 50 &&
+      bearishCandle
     ) {
-      signal = "🔴 بيع DOWN - كسر مؤكد";
+      signal = "🔴 بيع DOWN";
       direction = "هابط";
+
       duration = momentum <= 40
         ? "دقيقة واحدة"
         : "دقيقتان";
-    } else if (
-      nearResistance &&
-      upTrend &&
-      momentum >= 50 &&
-      momentum < 70
-    ) {
-      signal = "🟡 استعداد شراء - قرب المقاومة";
-      direction = "ميل صاعد";
-    } else if (
-      nearSupport &&
-      downTrend &&
-      momentum > 30 &&
-      momentum <= 50
-    ) {
-      signal = "🟠 استعداد بيع - قرب الدعم";
-      direction = "ميل هابط";
     }
-
-    const warning =
-      nearResistance || nearSupport
-        ? "⚠️ السعر قريب من مستوى مهم"
-        : "لا يوجد اقتراب من مستوى مهم";
 
     const resistanceText = resistance === null
       ? "غير متاح"
       : resistance.toFixed(symbol === "EUR/USD" ? 5 : 3) +
-        " (يبعد " + resistanceDistance.toFixed(1) + " نقطة)";
+        " (يبعد " + Math.max(0, resistanceDistance).toFixed(1) + " نقطة)";
 
     const supportText = support === null
       ? "غير متاح"
       : support.toFixed(symbol === "EUR/USD" ? 5 : 3) +
-        " (يبعد " + supportDistance.toFixed(1) + " نقطة)";
+        " (يبعد " + Math.max(0, supportDistance).toFixed(1) + " نقطة)";
+
+    const warning =
+      resistanceDistance !== null && resistanceDistance >= 0 &&
+      resistanceDistance <= 5
+        ? "⚠️ السعر قريب من المقاومة"
+        : supportDistance !== null && supportDistance >= 0 &&
+          supportDistance <= 5
+        ? "⚠️ السعر قريب من الدعم"
+        : "لا يوجد اقتراب من مستوى مهم";
 
     await ctx.reply(
       "📊 تحليل " + name + "\n\n" +
@@ -249,7 +251,7 @@ async function analyze(ctx, symbol, name) {
       "الاتجاه: " + direction + "\n" +
       "الإشارة: " + signal + "\n" +
       "المدة المقترحة: " + duration + "\n\n" +
-      warning + "\n" +
+      warning + "\n\n" +
       "⚠️ الإشارات تحليلية وليست ضماناً للربح."
     );
 
@@ -257,8 +259,10 @@ async function analyze(ctx, symbol, name) {
     console.error("[analysis error]", error);
 
     await ctx.reply(
-      "تعذر التحليل حاليًا. تحقق من مفتاح API والبيانات."
+      "تعذر التحليل حالياً. تحقق من البيانات ومفتاح API."
     );
   }
 }
+
+
 
