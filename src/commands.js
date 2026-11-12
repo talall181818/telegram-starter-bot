@@ -20,8 +20,8 @@ function calculateRSI(values, period = 14) {
 
   for (let i = 1; i <= period; i++) {
     const change = values[i] - values[i - 1];
-    if (change > 0) gains += change;
-    else losses += Math.abs(change);
+    gains += Math.max(change, 0);
+    losses += Math.max(-change, 0);
   }
 
   let avgGain = gains / period;
@@ -29,11 +29,12 @@ function calculateRSI(values, period = 14) {
 
   for (let i = period + 1; i < values.length; i++) {
     const change = values[i] - values[i - 1];
-    const gain = Math.max(change, 0);
-    const loss = Math.max(-change, 0);
 
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    avgGain =
+      (avgGain * (period - 1) + Math.max(change, 0)) / period;
+
+    avgLoss =
+      (avgLoss * (period - 1) + Math.max(-change, 0)) / period;
   }
 
   if (avgLoss === 0) return 100;
@@ -42,52 +43,10 @@ function calculateRSI(values, period = 14) {
   return 100 - 100 / (1 + rs);
 }
 
-// استخراج القمم والقيعان من الشموع السابقة
-function getLevels(candles) {
-  const highs = [];
-  const lows = [];
-
-  for (let i = 2; i < candles.length - 2; i++) {
-    const c = candles[i];
-
-    if (
-      c.high > candles[i - 1].high &&
-      c.high > candles[i - 2].high &&
-      c.high > candles[i + 1].high &&
-      c.high > candles[i + 2].high
-    ) {
-      highs.push(c.high);
-    }
-
-    if (
-      c.low < candles[i - 1].low &&
-      c.low < candles[i - 2].low &&
-      c.low < candles[i + 1].low &&
-      c.low < candles[i + 2].low
-    ) {
-      lows.push(c.low);
-    }
-  }
-
-  return { highs, lows };
-}
-
-function nearestLevel(levels, price, type) {
-  const filtered = levels.filter(level =>
-    type === "support" ? level < price : level > price
-  );
-
-  if (!filtered.length) return null;
-
-  return type === "support"
-    ? Math.max(...filtered)
-    : Math.min(...filtered);
-}
-
 async function analyze(ctx, symbol, name) {
   try {
     if (!API_KEY) {
-      return ctx.reply("⚠️ مفتاح TWELVEDATA_API_KEY غير موجود.");
+      return ctx.reply("⚠️ مفتاح الأسعار غير موجود.");
     }
 
     const url =
@@ -98,12 +57,16 @@ async function analyze(ctx, symbol, name) {
     const response = await fetch(url);
     const data = await response.json();
 
-    if (!response.ok || !data.values || data.values.length < 40) {
-      console.error("Twelve Data error:", data);
-      return ctx.reply("⚠️ البيانات غير متوفرة حاليًا. حاول لاحقًا.");
+    if (
+      !response.ok ||
+      !data.values ||
+      data.values.length < 35
+    ) {
+      console.error("Data error:", data);
+      return ctx.reply("⚠️ بيانات السوق غير متوفرة حاليًا.");
     }
 
-    // حذف الشمعة الأحدث لاحتمال أنها لم تكتمل
+    // استبعاد الشمعة الحالية غير المكتملة
     const candles = data.values
       .slice(1)
       .reverse()
@@ -120,67 +83,45 @@ async function analyze(ctx, symbol, name) {
     const previous = candles[candles.length - 2];
 
     const price = current.close;
+
     const ema9 = ema(prices.slice(-40), 9);
     const ema21 = ema(prices.slice(-60), 21);
     const rsi = calculateRSI(prices);
 
-    // المستويات مأخوذة من الشموع السابقة فقط
-    const { highs, lows } = getLevels(
-      candles.slice(0, -1)
-    );
+    const bullish = current.close > current.open;
+    const bearish = current.close < current.open;
 
-    const resistance = nearestLevel(
-      highs,
-      previous.close,
-      "resistance"
-    );
+    const upTrend = ema9 > ema21;
+    const downTrend = ema9 < ema21;
 
-    const support = nearestLevel(
-      lows,
-      previous.close,
-      "support"
-    );
+    const rising = current.close > previous.close;
+    const falling = current.close < previous.close;
 
-    const bullishCandle = current.close > current.open;
-    const bearishCandle = current.close < current.open;
+    // نظام شراء متوازن
+    const buySignal =
+      upTrend &&
+      price > ema9 &&
+      bullish &&
+      rising &&
+      rsi >= 50 &&
+      rsi <= 68;
 
-    const upTrend = ema9 > ema21 && price > ema9;
-    const downTrend = ema9 < ema21 && price < ema9;
-
-    const pip = symbol === "XAU/USD" ? 0.01 : 0.0001;
-
-    // اختراق المقاومة بإغلاق شمعة مكتملة
-    const breakoutUp =
-      resistance !== null &&
-      previous.close <= resistance &&
-      current.close > resistance + pip * 0.5 &&
-      bullishCandle;
-
-    // كسر الدعم بإغلاق شمعة مكتملة
-    const breakoutDown =
-      support !== null &&
-      previous.close >= support &&
-      current.close < support - pip * 0.5 &&
-      bearishCandle;
+    // نظام بيع متوازن
+    const sellSignal =
+      downTrend &&
+      price < ema9 &&
+      bearish &&
+      falling &&
+      rsi >= 32 &&
+      rsi <= 50;
 
     let signal = "⏳ انتظار";
     let duration = "لا توجد مدة مقترحة";
 
-    if (
-      breakoutUp &&
-      upTrend &&
-      rsi >= 50 &&
-      rsi <= 68
-    ) {
+    if (buySignal) {
       signal = "🟢 شراء UP";
       duration = rsi >= 58 ? "دقيقتان" : "دقيقة واحدة";
-
-    } else if (
-      breakoutDown &&
-      downTrend &&
-      rsi >= 32 &&
-      rsi <= 50
-    ) {
+    } else if (sellSignal) {
       signal = "🔴 بيع DOWN";
       duration = rsi <= 42 ? "دقيقتان" : "دقيقة واحدة";
     }
@@ -189,7 +130,11 @@ async function analyze(ctx, symbol, name) {
 
     const reply =
       "📊 تحليل " + name + "\n\n" +
-      "السعر: " + price.toFixed(decimals) + "\n\n" +
+      "⏱ فريم التحليل: دقيقة واحدة\n\n" +
+      "السعر: " + price.toFixed(decimals) + "\n" +
+      "EMA 9: " + ema9.toFixed(decimals) + "\n" +
+      "EMA 21: " + ema21.toFixed(decimals) + "\n" +
+      "RSI: " + rsi.toFixed(2) + "\n\n" +
       "الإشارة: " + signal + "\n" +
       "المدة المقترحة: " + duration + "\n\n" +
       "⚠️ الإشارات تحليلية وليست ضمانًا للربح.";
@@ -198,11 +143,12 @@ async function analyze(ctx, symbol, name) {
 
   } catch (error) {
     console.error("Analysis error:", error);
-    return ctx.reply("⚠️ حدث خطأ أثناء التحليل. حاول مرة أخرى.");
+    return ctx.reply("⚠️ حدث خطأ أثناء التحليل.");
   }
 }
 
 export function registerCommands(bot) {
+
   bot.command("start", ctx =>
     ctx.reply(
       "أهلاً بك في Masaad 🤖\n\n" +
