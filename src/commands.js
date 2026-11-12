@@ -31,11 +31,13 @@ function rsi(values, period = 14) {
 
   for (let i = values.length - period; i < values.length; i++) {
     const change = values[i] - values[i - 1];
+
     if (change > 0) gains += change;
     else losses -= change;
   }
 
   if (losses === 0) return 100;
+
   return 100 - 100 / (1 + gains / losses);
 }
 
@@ -43,7 +45,10 @@ async function analyze(ctx, symbol, name) {
   try {
     if (!API_KEY) throw new Error("API key missing");
 
-    const url = new URL("https://api.twelvedata.com/time_series");
+    const url = new URL(
+      "https://api.twelvedata.com/time_series"
+    );
+
     url.searchParams.set("symbol", symbol);
     url.searchParams.set("interval", "1min");
     url.searchParams.set("outputsize", "50");
@@ -76,8 +81,14 @@ async function analyze(ctx, symbol, name) {
     const momentum = rsi(closes);
 
     const history = candles.slice(-21, -1);
-    const resistance = Math.max(...history.map(c => c.high));
-    const support = Math.min(...history.map(c => c.low));
+
+    const resistance = Math.max(
+      ...history.map(c => c.high)
+    );
+
+    const support = Math.min(
+      ...history.map(c => c.low)
+    );
 
     const nearResistance =
       current.close < resistance &&
@@ -94,8 +105,10 @@ async function analyze(ctx, symbol, name) {
 
     const upTrend = fast > slow;
     const downTrend = fast < slow;
-const overbought = momentum >= 70;
-const oversold = momentum <= 30;
+
+    const overbought = momentum >= 70;
+    const oversold = momentum <= 30;
+
     const breakoutUp =
       previous.close <= resistance &&
       current.close > resistance &&
@@ -110,26 +123,41 @@ const oversold = momentum <= 30;
     let direction = "غير مؤكد";
     let duration = "لا توجد مدة مقترحة";
 
-    if (breakoutUp && upTrend && momentum >= 50 && momentum <= 75) {
+    if (
+      breakoutUp &&
+      upTrend &&
+      momentum >= 50 &&
+      momentum < 70 &&
+      bullishCandle
+    ) {
       signal = "🟢 شراء UP - اختراق مؤكد";
       direction = "صاعد";
       duration = "دقيقة واحدة";
     } else if (
-      breakoutDown && downTrend &&
-      momentum >= 25 && momentum <= 50
+      breakoutDown &&
+      downTrend &&
+      momentum > 30 &&
+      momentum <= 50 &&
+      bearishCandle
     ) {
       signal = "🔴 بيع DOWN - كسر مؤكد";
       direction = "هابط";
       duration = "دقيقة واحدة";
     } else if (
-      nearResistance && upTrend &&
-      momentum >= 50 && momentum <= 68 && bullishCandle
+      nearResistance &&
+      upTrend &&
+      momentum >= 50 &&
+      momentum < 70 &&
+      bullishCandle
     ) {
       signal = "🟡 استعداد شراء - قرب المقاومة";
       direction = "ميل صاعد";
     } else if (
-      nearSupport && downTrend &&
-      momentum >= 32 && momentum <= 50 && bearishCandle
+      nearSupport &&
+      downTrend &&
+      momentum > 30 &&
+      momentum <= 50 &&
+      bearishCandle
     ) {
       signal = "🟠 استعداد بيع - قرب الدعم";
       direction = "ميل هابط";
@@ -138,6 +166,12 @@ const oversold = momentum <= 30;
     const warningText = earlyWarning
       ? "⚠️ تنبيه مبكر: السعر قريب من الدعم أو المقاومة"
       : "لا يوجد تنبيه مبكر";
+
+    const rsiWarning = overbought
+      ? "⚠️ تشبع شرائي - تجنب الشراء"
+      : oversold
+      ? "⚠️ تشبع بيعي - تجنب البيع"
+      : "RSI ضمن النطاق المحدد";
 
     await ctx.reply(
       `📊 تحليل ${name}\n\n` +
@@ -151,6 +185,7 @@ const oversold = momentum <= 30;
       `الإشارة: ${signal}\n` +
       `المدة المقترحة: ${duration}\n\n` +
       `${warningText}\n` +
+      `${rsiWarning}\n` +
       `⚠️ الإشارات تحليلية وليست ضماناً للربح.`
     );
 
@@ -161,4 +196,3 @@ const oversold = momentum <= 30;
     );
   }
 }
-
