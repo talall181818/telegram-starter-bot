@@ -49,7 +49,7 @@ function rsi(values, period = 14) {
   return 100 - 100 / (1 + gains / losses);
 }
 
-// أقرب دعم ومقاومة
+// استخراج أقرب المستويات
 function findLevels(candles, reference) {
   const resistanceCandidates = [];
   const supportCandidates = [];
@@ -119,7 +119,8 @@ async function analyze(ctx, symbol, name) {
       throw new Error(data.message || "Data unavailable");
     }
 
-    const candles = data.values.slice().reverse().map(c => ({
+    // استبعاد الشمعة الحالية غير المكتملة
+    const candles = data.values.slice(1).reverse().map(c => ({
       open: Number(c.open),
       high: Number(c.high),
       low: Number(c.low),
@@ -147,13 +148,17 @@ async function analyze(ctx, symbol, name) {
     const slow = ema(closes, 21);
     const momentum = rsi(closes);
 
-    // آخر 30 شمعة قبل الشمعة الحالية
+    // آخر 30 شمعة مكتملة قبل شمعة الإشارة
     const history = candles.slice(-31, -1);
 
-    const levels = findLevels(history, previous.close);
+    // مستويات الاختراق مقارنة بالسعر السابق
+    const breakoutLevels = findLevels(history, previous.close);
 
-    const resistance = levels.resistance;
-    const support = levels.support;
+    // مستويات العرض مقارنة بالسعر الحالي
+    const displayLevels = findLevels(history, current.close);
+
+    const resistance = displayLevels.resistance;
+    const support = displayLevels.support;
 
     const pip = symbol === "EUR/USD" ? 0.0001 : 0.01;
 
@@ -172,29 +177,40 @@ async function analyze(ctx, symbol, name) {
     const downTrend = fast < slow;
 
     const breakoutUp =
-      resistance !== null &&
-      previous.close <= resistance &&
-      current.close > resistance &&
+      breakoutLevels.resistance !== null &&
+      previous.close <= breakoutLevels.resistance &&
+      current.close > breakoutLevels.resistance &&
       bullishCandle;
 
     const breakoutDown =
-      support !== null &&
-      previous.close >= support &&
-      current.close < support &&
+      breakoutLevels.support !== null &&
+      previous.close >= breakoutLevels.support &&
+      current.close < breakoutLevels.support &&
       bearishCandle;
 
-    // لا توجد إشارات استعداد
+    // منع الدخول بعد الابتعاد عن نقطة الاختراق
+    const maxExtension = 3 * pip;
+
+    const goodBuyEntry =
+      breakoutUp &&
+      current.close - breakoutLevels.resistance <= maxExtension;
+
+    const goodSellEntry =
+      breakoutDown &&
+      breakoutLevels.support - current.close <= maxExtension;
+
     let signal = "⏳ انتظار";
     let direction = "غير مؤكد";
     let duration = "لا توجد مدة";
 
-    // شراء عند توافق جميع الشروط
+    // شراء فقط عند توافق جميع الشروط
     if (
-      breakoutUp &&
+      goodBuyEntry &&
       upTrend &&
       momentum >= 50 &&
       momentum < 70 &&
-      bullishCandle
+      bullishCandle &&
+      !goodSellEntry
     ) {
       signal = "🟢 شراء UP";
       direction = "صاعد";
@@ -204,13 +220,14 @@ async function analyze(ctx, symbol, name) {
         : "دقيقتان";
     }
 
-    // بيع عند توافق جميع الشروط
+    // بيع فقط عند توافق جميع الشروط
     else if (
-      breakoutDown &&
+      goodSellEntry &&
       downTrend &&
       momentum > 30 &&
       momentum <= 50 &&
-      bearishCandle
+      bearishCandle &&
+      !goodBuyEntry
     ) {
       signal = "🔴 بيع DOWN";
       direction = "هابط";
@@ -220,31 +237,41 @@ async function analyze(ctx, symbol, name) {
         : "دقيقتان";
     }
 
+    const formatPrice = value =>
+      value.toFixed(symbol === "EUR/USD" ? 5 : 3);
+
     const resistanceText = resistance === null
       ? "غير متاح"
-      : resistance.toFixed(symbol === "EUR/USD" ? 5 : 3) +
-        " (يبعد " + Math.max(0, resistanceDistance).toFixed(1) + " نقطة)";
+      : formatPrice(resistance) +
+        " (يبعد " + resistanceDistance.toFixed(1) + " نقطة)";
 
     const supportText = support === null
       ? "غير متاح"
-      : support.toFixed(symbol === "EUR/USD" ? 5 : 3) +
-        " (يبعد " + Math.max(0, supportDistance).toFixed(1) + " نقطة)";
+      : formatPrice(support) +
+        " (يبعد " + supportDistance.toFixed(1) + " نقطة)";
 
-    const warning =
-      resistanceDistance !== null && resistanceDistance >= 0 &&
+    let warning = "لا يوجد اقتراب من مستوى مهم";
+
+    if (
+      resistanceDistance !== null &&
+      resistanceDistance >= 0 &&
       resistanceDistance <= 5
-        ? "⚠️ السعر قريب من المقاومة"
-        : supportDistance !== null && supportDistance >= 0 &&
-          supportDistance <= 5
-        ? "⚠️ السعر قريب من الدعم"
-        : "لا يوجد اقتراب من مستوى مهم";
+    ) {
+      warning = "⚠️ السعر قريب من المقاومة";
+    } else if (
+      supportDistance !== null &&
+      supportDistance >= 0 &&
+      supportDistance <= 5
+    ) {
+      warning = "⚠️ السعر قريب من الدعم";
+    }
 
     await ctx.reply(
       "📊 تحليل " + name + "\n\n" +
       "⏱ فريم التحليل: دقيقة واحدة (1M)\n\n" +
-      "السعر: " + current.close + "\n" +
-      "EMA 9: " + fast.toFixed(5) + "\n" +
-      "EMA 21: " + slow.toFixed(5) + "\n" +
+      "السعر: " + formatPrice(current.close) + "\n" +
+      "EMA 9: " + formatPrice(fast) + "\n" +
+      "EMA 21: " + formatPrice(slow) + "\n" +
       "RSI: " + momentum.toFixed(2) + "\n\n" +
       "🔺 أقرب مقاومة: " + resistanceText + "\n" +
       "🔻 أقرب دعم: " + supportText + "\n\n" +
@@ -263,6 +290,4 @@ async function analyze(ctx, symbol, name) {
     );
   }
 }
-
-
 
