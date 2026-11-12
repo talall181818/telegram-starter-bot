@@ -2,11 +2,11 @@
 const API_KEY = process.env.TWELVEDATA_API_KEY;
 
 function ema(values, period) {
-  const multiplier = 2 / (period + 1);
+  const k = 2 / (period + 1);
   let result = values[0];
 
   for (let i = 1; i < values.length; i++) {
-    result = values[i] * multiplier + result * (1 - multiplier);
+    result = values[i] * k + result * (1 - k);
   }
 
   return result;
@@ -41,18 +41,14 @@ function getLevels(candles) {
       c.low < candles[i - 2].low &&
       c.low < candles[i + 1].low &&
       c.low < candles[i + 2].low
-    ) {
-      supports.push(c.low);
-    }
+    ) supports.push(c.low);
 
     if (
       c.high > candles[i - 1].high &&
       c.high > candles[i - 2].high &&
       c.high > candles[i + 1].high &&
       c.high > candles[i + 2].high
-    ) {
-      resistances.push(c.high);
-    }
+    ) resistances.push(c.high);
   }
 
   return { supports, resistances };
@@ -73,7 +69,7 @@ function nearestLevel(levels, price, type) {
 async function analyze(ctx, symbol, name) {
   try {
     if (!API_KEY) {
-      return ctx.reply("⚠️ مفتاح Twelve Data غير موجود في إعدادات البوت.");
+      return ctx.reply("⚠️ مفتاح Twelve Data غير موجود.");
     }
 
     const url =
@@ -85,10 +81,9 @@ async function analyze(ctx, symbol, name) {
     const data = await response.json();
 
     if (!data.values || data.values.length < 30) {
-      return ctx.reply("⚠️ لا توجد بيانات كافية للتحليل حاليًا.");
+      return ctx.reply("⚠️ البيانات غير كافية للتحليل حاليًا.");
     }
 
-    // تجاهل الشمعة الحالية غير المكتملة
     const candles = data.values.slice(1).reverse().map(c => ({
       open: Number(c.open),
       high: Number(c.high),
@@ -99,13 +94,15 @@ async function analyze(ctx, symbol, name) {
     const prices = candles.map(c => c.close);
     const last = candles[candles.length - 1];
     const previous = candles[candles.length - 2];
+    const before = candles[candles.length - 3];
 
     const price = last.close;
     const ema9 = ema(prices.slice(-40), 9);
     const ema21 = ema(prices.slice(-60), 21);
     const rsi = calculateRSI(prices);
 
-    const { supports, resistances } = getLevels(candles.slice(0, -2));
+    const { supports, resistances } =
+      getLevels(candles.slice(0, -2));
 
     const support = nearestLevel(supports, price, "support");
     const resistance = nearestLevel(resistances, price, "resistance");
@@ -119,74 +116,99 @@ async function analyze(ctx, symbol, name) {
     const resistanceDistance = resistance === null
       ? null : (resistance - price) / pip;
 
-    const bullishCandle = last.close > last.open;
-    const bearishCandle = last.close < last.open;
+    const bullish = last.close > last.open;
+    const bearish = last.close < last.open;
 
     const upTrend = ema9 > ema21 && price > ema9;
     const downTrend = ema9 < ema21 && price < ema9;
 
+    const nearSupport =
+      supportDistance !== null && supportDistance <= 3;
+
+    const nearResistance =
+      resistanceDistance !== null && resistanceDistance <= 3;
+
+    // اختراق المقاومة مع إغلاق فوقها
     const breakoutUp =
       resistance !== null &&
       previous.close <= resistance &&
-      price > resistance;
+      last.close > resistance &&
+      bullish;
 
+    // كسر الدعم مع إغلاق تحته
     const breakoutDown =
       support !== null &&
       previous.close >= support &&
-      price < support;
+      last.close < support &&
+      bearish;
 
-    const nearResistance =
-      resistanceDistance !== null && resistanceDistance <= 1.5;
+    // ارتداد من الدعم
+    const supportBounce =
+      support !== null &&
+      before.low <= support + pip * 2 &&
+      last.close > support &&
+      bullish;
 
-    const nearSupport =
-      supportDistance !== null && supportDistance <= 1.5;
+    // رفض السعر من المقاومة
+    const resistanceReject =
+      resistance !== null &&
+      before.high >= resistance - pip * 2 &&
+      last.close < resistance &&
+      bearish;
 
     let signal = "⏳ انتظار";
     let direction = "غير مؤكد";
     let duration = "لا توجد مدة مقترحة";
-    let reason = "الشروط غير مكتملة؛ انتظر تأكيد الاتجاه.";
+    let reason = "ننتظر تأكيد الحركة قبل الدخول.";
 
-    // شروط الشراء
-    const buyMomentum =
+    const buyConfirmed =
       upTrend &&
-      bullishCandle &&
-      rsi >= 52 &&
-      rsi <= 70;
+      rsi >= 50 &&
+      rsi <= 70 &&
+      bullish &&
+      (breakoutUp || supportBounce);
 
-    // شروط البيع
-    const sellMomentum =
+    const sellConfirmed =
       downTrend &&
-      bearishCandle &&
       rsi >= 30 &&
-      rsi <= 48;
+      rsi <= 50 &&
+      bearish &&
+      (breakoutDown || resistanceReject);
 
-    if (buyMomentum && (breakoutUp || !nearResistance)) {
+    if (breakoutUp && buyConfirmed) {
       signal = "🟢 شراء UP";
       direction = "صاعد";
       duration = "دقيقة واحدة";
-      reason = breakoutUp
-        ? "اختراق المقاومة مع تأكيد الاتجاه الصاعد."
-        : "الاتجاه صاعد والزخم يدعم الشراء.";
-    } else if (sellMomentum && (breakoutDown || !nearSupport)) {
+      reason = "اختراق المقاومة بإغلاق صاعد وتوافق المؤشرات.";
+    } else if (supportBounce && buyConfirmed) {
+      signal = "🟢 شراء UP";
+      direction = "صاعد";
+      duration = "دقيقة واحدة";
+      reason = "ارتداد صاعد من الدعم مع تأكيد الاتجاه.";
+    } else if (breakoutDown && sellConfirmed) {
       signal = "🔴 بيع DOWN";
       direction = "هابط";
       duration = "دقيقتان";
-      reason = breakoutDown
-        ? "كسر الدعم مع تأكيد الاتجاه الهابط."
-        : "الاتجاه هابط والزخم يدعم البيع.";
+      reason = "كسر الدعم بإغلاق هابط وتوافق المؤشرات.";
+    } else if (resistanceReject && sellConfirmed) {
+      signal = "🔴 بيع DOWN";
+      direction = "هابط";
+      duration = "دقيقتان";
+      reason = "رفض السعر من المقاومة مع تأكيد الاتجاه الهابط.";
     } else if (nearResistance) {
-      reason = "السعر قريب من المقاومة؛ لا تستعجل الشراء.";
+      reason = "السعر قريب من المقاومة؛ انتظر اختراقًا مؤكدًا أو ارتدادًا.";
     } else if (nearSupport) {
-      reason = "السعر قريب من الدعم؛ لا تستعجل البيع.";
-    } else if (rsi > 70) {
-      reason = "السوق في منطقة تشبع شرائي.";
-    } else if (rsi < 30) {
-      reason = "السوق في منطقة تشبع بيعي.";
-    } else if (!upTrend && !downTrend) {
-      reason = "الاتجاه غير واضح؛ ننتظر تأكيد الحركة.";
+      reason = "السعر قريب من الدعم؛ انتظر ارتدادًا مؤكدًا أو كسرًا.";
+    } else if (upTrend) {
+      reason = "الميل صاعد لكن لا يوجد اختراق أو ارتداد مكتمل.";
+    } else if (downTrend) {
+      reason = "الميل هابط لكن لا يوجد كسر أو رفض مكتمل.";
+    } else {
+      reason = "الاتجاه غير واضح؛ ننتظر فرصة أفضل.";
     }
 
-    const fmt = n => n === null ? "غير متوفر" : n.toFixed(decimals);
+    const fmt = n =>
+      n === null ? "غير متوفر" : n.toFixed(decimals);
 
     const reply =
       "📊 تحليل " + name + "\n\n" +
@@ -220,7 +242,7 @@ export function registerCommands(bot) {
     ctx.reply(
       "أهلاً بك في Masaad 🤖\n\n" +
       "تحليل الذهب واليورو دولار.\n" +
-      "أرسل /help لعرض الأوامر."
+      "أرسل /help للمساعدة."
     )
   );
 
