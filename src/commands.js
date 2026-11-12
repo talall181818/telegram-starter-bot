@@ -75,7 +75,9 @@ function findLevels(candles, price, pip) {
 async function analyze(ctx, symbol, name) {
   try {
     if (!API_KEY) {
-      return ctx.reply("⚠️ مفتاح Twelve Data غير موجود في إعدادات الاستضافة.");
+      return ctx.reply(
+        "⚠️ مفتاح Twelve Data غير موجود في إعدادات الاستضافة."
+      );
     }
 
     const url =
@@ -88,10 +90,11 @@ async function analyze(ctx, symbol, name) {
     const data = await response.json();
 
     if (!data.values || data.values.length < 30) {
-      return ctx.reply("⚠️ لم تصل بيانات كافية للتحليل. حاول لاحقًا.");
+      return ctx.reply(
+        "⚠️ لم تصل بيانات كافية للتحليل. حاول لاحقًا."
+      );
     }
 
-    // استبعاد الشمعة الأحدث التي قد تكون غير مكتملة
     const candles = data.values
       .slice(1)
       .reverse()
@@ -114,8 +117,11 @@ async function analyze(ctx, symbol, name) {
     const pip = symbol === "EUR/USD" ? 0.0001 : 0.01;
     const digits = symbol === "EUR/USD" ? 5 : 2;
 
-    const { resistance, support } =
-      findLevels(candles.slice(0, -1), previous.close, pip);
+    const { resistance, support } = findLevels(
+      candles.slice(0, -1),
+      previous.close,
+      pip
+    );
 
     const upTrend = ema9 > ema21;
     const downTrend = ema9 < ema21;
@@ -135,11 +141,21 @@ async function analyze(ctx, symbol, name) {
       price < support &&
       support - price <= pip * 3;
 
+    const nearResistance =
+      resistance !== undefined &&
+      Math.abs(resistance - price) <= pip * 5;
+
+    const nearSupport =
+      support !== undefined &&
+      Math.abs(price - support) <= pip * 5;
+
     let signal = "⏳ انتظار";
     let direction = "غير مؤكد";
     let duration = "لا توجد مدة مقترحة";
 
-    if (
+    if (nearResistance || nearSupport) {
+      signal = "⏳ انتظار - السعر قريب من الدعم أو المقاومة";
+    } else if (
       breakoutUp &&
       upTrend &&
       rsi >= 50 &&
@@ -186,7 +202,9 @@ async function analyze(ctx, symbol, name) {
 
   } catch (error) {
     console.error("Analysis error:", error);
-    await ctx.reply("⚠️ حدث خطأ أثناء التحليل. حاول مرة أخرى.");
+    await ctx.reply(
+      "⚠️ حدث خطأ أثناء التحليل. حاول مرة أخرى."
+    );
   }
 }
 
@@ -215,3 +233,4 @@ export function registerCommands(bot) {
     analyze(ctx, "EUR/USD", "اليورو دولار")
   );
 }
+
