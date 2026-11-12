@@ -27,46 +27,47 @@ function calculateRSI(values, period = 14) {
 
   if (losses === 0) return 100;
 
-  const averageGain = gains / period;
-  const averageLoss = losses / period;
-  const rs = averageGain / averageLoss;
-
+  const rs = (gains / period) / (losses / period);
   return 100 - 100 / (1 + rs);
 }
 
-function findLevels(candles, price, pip) {
-  const history = candles.slice(-30);
+function getPivotLevels(candles) {
+  const history = candles.slice(-50);
   const highs = [];
   const lows = [];
 
   for (let i = 2; i < history.length - 2; i++) {
-    const candle = history[i];
+    const c = history[i];
 
     if (
-      candle.high > history[i - 1].high &&
-      candle.high > history[i - 2].high &&
-      candle.high > history[i + 1].high &&
-      candle.high > history[i + 2].high
+      c.high > history[i - 1].high &&
+      c.high > history[i - 2].high &&
+      c.high > history[i + 1].high &&
+      c.high > history[i + 2].high
     ) {
-      highs.push(candle.high);
+      highs.push(c.high);
     }
 
     if (
-      candle.low < history[i - 1].low &&
-      candle.low < history[i - 2].low &&
-      candle.low < history[i + 1].low &&
-      candle.low < history[i + 2].low
+      c.low < history[i - 1].low &&
+      c.low < history[i - 2].low &&
+      c.low < history[i + 1].low &&
+      c.low < history[i + 2].low
     ) {
-      lows.push(candle.low);
+      lows.push(c.low);
     }
   }
 
-  const resistance = highs
-    .filter(level => level - price >= pip * 5)
+  return { highs, lows };
+}
+
+function nearestLevels(levels, price) {
+  const resistance = levels.highs
+    .filter(level => level > price)
     .sort((a, b) => a - b)[0];
 
-  const support = lows
-    .filter(level => price - level >= pip * 5)
+  const support = levels.lows
+    .filter(level => level < price)
     .sort((a, b) => b - a)[0];
 
   return { resistance, support };
@@ -75,9 +76,7 @@ function findLevels(candles, price, pip) {
 async function analyze(ctx, symbol, name) {
   try {
     if (!API_KEY) {
-      return ctx.reply(
-        "⚠️ مفتاح Twelve Data غير موجود في إعدادات الاستضافة."
-      );
+      return ctx.reply("⚠️ مفتاح Twelve Data غير موجود.");
     }
 
     const url =
@@ -90,9 +89,7 @@ async function analyze(ctx, symbol, name) {
     const data = await response.json();
 
     if (!data.values || data.values.length < 30) {
-      return ctx.reply(
-        "⚠️ لم تصل بيانات كافية للتحليل. حاول لاحقًا."
-      );
+      return ctx.reply("⚠️ بيانات السوق غير كافية للتحليل.");
     }
 
     const candles = data.values
@@ -117,29 +114,20 @@ async function analyze(ctx, symbol, name) {
     const pip = symbol === "EUR/USD" ? 0.0001 : 0.01;
     const digits = symbol === "EUR/USD" ? 5 : 2;
 
-    const { resistance, support } = findLevels(
-      candles.slice(0, -1),
-      previous.close,
-      pip
-    );
+    // مستويات الشموع السابقة فقط
+    const levels = getPivotLevels(candles.slice(0, -1));
 
-    const upTrend = ema9 > ema21;
-    const downTrend = ema9 < ema21;
+    // أقرب المستويات للسعر الحالي
+    const currentLevels = nearestLevels(levels, price);
 
-    const bullishCandle = current.close > current.open;
-    const bearishCandle = current.close < current.open;
+    // مستويات الاختراق محسوبة من إغلاق الشمعة السابقة
+    const previousLevels = nearestLevels(levels, previous.close);
 
-    const breakoutUp =
-      resistance !== undefined &&
-      previous.close <= resistance &&
-      price > resistance &&
-      price - resistance <= pip * 3;
+    const resistance = currentLevels.resistance;
+    const support = currentLevels.support;
 
-    const breakoutDown =
-      support !== undefined &&
-      previous.close >= support &&
-      price < support &&
-      support - price <= pip * 3;
+    const resistanceBreak = previousLevels.resistance;
+    const supportBreak = previousLevels.support;
 
     const nearResistance =
       resistance !== undefined &&
@@ -149,12 +137,30 @@ async function analyze(ctx, symbol, name) {
       support !== undefined &&
       Math.abs(price - support) <= pip * 5;
 
+    const upTrend = ema9 > ema21;
+    const downTrend = ema9 < ema21;
+
+    const bullishCandle = current.close > current.open;
+    const bearishCandle = current.close < current.open;
+
+    const breakoutUp =
+      resistanceBreak !== undefined &&
+      previous.close <= resistanceBreak &&
+      price > resistanceBreak &&
+      price - resistanceBreak <= pip * 10;
+
+    const breakoutDown =
+      supportBreak !== undefined &&
+      previous.close >= supportBreak &&
+      price < supportBreak &&
+      supportBreak - price <= pip * 10;
+
     let signal = "⏳ انتظار";
     let direction = "غير مؤكد";
     let duration = "لا توجد مدة مقترحة";
 
     if (nearResistance || nearSupport) {
-      signal = "⏳ انتظار - السعر قريب من الدعم أو المقاومة";
+      signal = "⏳ انتظار - قريب من الدعم أو المقاومة";
     } else if (
       breakoutUp &&
       upTrend &&
@@ -178,12 +184,12 @@ async function analyze(ctx, symbol, name) {
     }
 
     const resistanceText = resistance !== undefined
-      ? `${resistance.toFixed(digits)} (يبعد ${((resistance - price) / pip).toFixed(1)} نقطة)`
-      : "لا توجد مقاومة قوية تبعد 5 نقاط على الأقل";
+      ? `${resistance.toFixed(digits)} (يبعد ${((resistance - price) / pip).toFixed(1)} بيب)`
+      : "غير متوفرة";
 
     const supportText = support !== undefined
-      ? `${support.toFixed(digits)} (يبعد ${((price - support) / pip).toFixed(1)} نقطة)`
-      : "لا يوجد دعم قوي يبعد 5 نقاط على الأقل";
+      ? `${support.toFixed(digits)} (يبعد ${((price - support) / pip).toFixed(1)} بيب)`
+      : "غير متوفر";
 
     await ctx.reply(
       `📊 تحليل ${name}\n\n` +
@@ -192,8 +198,8 @@ async function analyze(ctx, symbol, name) {
       `EMA 9: ${ema9.toFixed(digits)}\n` +
       `EMA 21: ${ema21.toFixed(digits)}\n` +
       `RSI: ${rsi.toFixed(2)}\n\n` +
-      `🔺 أقرب مقاومة قوية: ${resistanceText}\n` +
-      `🔻 أقرب دعم قوي: ${supportText}\n\n` +
+      `🔺 أقرب مقاومة: ${resistanceText}\n` +
+      `🔻 أقرب دعم: ${supportText}\n\n` +
       `الاتجاه: ${direction}\n` +
       `الإشارة: ${signal}\n` +
       `المدة المقترحة: ${duration}\n\n` +
@@ -202,9 +208,7 @@ async function analyze(ctx, symbol, name) {
 
   } catch (error) {
     console.error("Analysis error:", error);
-    await ctx.reply(
-      "⚠️ حدث خطأ أثناء التحليل. حاول مرة أخرى."
-    );
+    await ctx.reply("⚠️ حدث خطأ أثناء التحليل.");
   }
 }
 
