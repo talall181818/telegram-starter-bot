@@ -1,4 +1,3 @@
-
 import { Bot } from "grammy";
 import { registerCommands } from "./commands.js";
 
@@ -11,18 +10,17 @@ if (!token) {
 
 const bot = new Bot(token);
 
-// تسجيل أوامر البوت
 registerCommands(bot);
 
-// تسجيل الأخطاء
 bot.catch((err) => {
   console.error("Bot error:", err.error);
 });
 
-// تشغيل البوت
 async function main() {
   try {
-    await bot.api.deleteWebhook({ drop_pending_updates: false });
+    await bot.api.deleteWebhook({
+      drop_pending_updates: false
+    });
 
     await bot.start({
       onStart: (botInfo) => {
@@ -37,4 +35,3 @@ async function main() {
 }
 
 main();
-
