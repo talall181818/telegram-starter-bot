@@ -13,22 +13,49 @@ function parsePrice(text) {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function analyzeSmart(high, low, nextOpen, currentPrice) {
-  let signal = "⏳ انتظار";
-  let direction = "لم يحدث اختراق أو كسر واضح";
+function analyzeSmart(high, low, open, current, after10) {
+  const range = high - low;
+  const movement = after10 - current;
 
-  if (currentPrice > high && currentPrice > nextOpen) {
+  let signal = "⏳ انتظار";
+  let direction = "الحركة غير مؤكدة";
+  let duration = "لا توجد مدة مقترحة";
+
+  if (
+    current > high &&
+    current > open &&
+    after10 > current
+  ) {
     signal = "🟢 شراء UP";
-    direction = "اختراق القمة مع حركة صاعدة";
-  } else if (currentPrice < low && currentPrice < nextOpen) {
+    direction = "اختراق القمة واستمرار الصعود";
+
+    const strength = movement / range;
+
+    if (strength >= 0.25) duration = "30 ثانية";
+    else if (strength >= 0.10) duration = "45 ثانية";
+    else duration = "دقيقة واحدة";
+  }
+
+  else if (
+    current < low &&
+    current < open &&
+    after10 < current
+  ) {
     signal = "🔴 بيع DOWN";
-    direction = "كسر القاع مع حركة هابطة";
+    direction = "كسر القاع واستمرار الهبوط";
+
+    const strength = Math.abs(movement) / range;
+
+    if (strength >= 0.25) duration = "30 ثانية";
+    else if (strength >= 0.10) duration = "45 ثانية";
+    else duration = "دقيقة واحدة";
   }
 
   return {
     signal,
     direction,
-    change: currentPrice - nextOpen
+    duration,
+    movement
   };
 }
 
@@ -46,12 +73,13 @@ export function registerCommands(bot) {
   bot.command("help", async ctx => {
     await ctx.reply(
       "📌 طريقة تحليل Smart\n\n" +
-      "أرسل /smart ثم أدخل:\n\n" +
-      "1️⃣ قمة الشمعة السابقة\n" +
-      "2️⃣ قاع الشمعة السابقة\n" +
-      "3️⃣ افتتاح الشمعة التالية\n" +
-      "4️⃣ السعر الحالي\n\n" +
-      "سيظهر التحليل تلقائياً بعد القيمة الرابعة."
+      "أرسل /smart ثم أدخل:\n" +
+      "1- قمة الشمعة السابقة\n" +
+      "2- قاع الشمعة السابقة\n" +
+      "3- افتتاح الشمعة التالية\n" +
+      "4- السعر الحالي\n" +
+      "5- السعر بعد 10 ثوانٍ\n\n" +
+      "سيحسب البوت الاتجاه والمدة التجريبية."
     );
   });
 
@@ -62,7 +90,8 @@ export function registerCommands(bot) {
       step: 0,
       high: null,
       low: null,
-      nextOpen: null
+      open: null,
+      current: null
     });
 
     await ctx.reply(
@@ -103,7 +132,7 @@ export function registerCommands(bot) {
 
     if (session.step === 1) {
       if (price >= session.high) {
-        await ctx.reply("⚠️ القاع يجب أن يكون أقل من القمة. أعد إرسال القاع.");
+        await ctx.reply("⚠️ القاع يجب أن يكون أقل من القمة.");
         return;
       }
 
@@ -114,17 +143,29 @@ export function registerCommands(bot) {
     }
 
     if (session.step === 2) {
-      session.nextOpen = price;
+      session.open = price;
       session.step = 3;
-      await ctx.reply("✅ تم تسجيل الافتتاح.\n\nأرسل السعر الحالي الآن.");
+      await ctx.reply("✅ تم تسجيل الافتتاح.\n\nأرسل السعر الحالي.");
       return;
     }
 
     if (session.step === 3) {
+      session.current = price;
+      session.step = 4;
+
+      await ctx.reply(
+        "✅ تم تسجيل السعر الحالي.\n\n" +
+        "⏳ انتظر 10 ثوانٍ من الآن، ثم أرسل السعر مرة ثانية."
+      );
+      return;
+    }
+
+    if (session.step === 4) {
       const result = analyzeSmart(
         session.high,
         session.low,
-        session.nextOpen,
+        session.open,
+        session.current,
         price
       );
 
@@ -133,17 +174,18 @@ export function registerCommands(bot) {
       await ctx.reply(
         "📊 تحليل Smart - Masaad\n\n" +
         "⏱ فريم الدقيقة 1M\n\n" +
-        `🔺 القمة السابقة: ${session.high}\n` +
-        `🔻 القاع السابق: ${session.low}\n` +
-        `🕯 الافتتاح: ${session.nextOpen}\n` +
-        `💰 السعر الحالي: ${price}\n\n` +
-        `📈 الحركة من الافتتاح: ${result.change.toFixed(5)}\n` +
+        `🔺 القمة: ${session.high}\n` +
+        `🔻 القاع: ${session.low}\n` +
+        `🕯 الافتتاح: ${session.open}\n` +
+        `💰 السعر الأول: ${session.current}\n` +
+        `💰 السعر بعد 10 ثوانٍ: ${price}\n\n` +
+        `📈 الحركة خلال 10 ثوانٍ: ${result.movement.toFixed(5)}\n` +
         `📍 القراءة: ${result.direction}\n\n` +
-        `🎯 الإشارة: ${result.signal}\n\n` +
-        "⚠️ قراءة مبدئية؛ يُفضّل انتظار إغلاق الشمعة لتأكيد الاختراق أو الكسر.\n\n" +
+        `🎯 الإشارة: ${result.signal}\n` +
+        `⏱ المدة التجريبية: ${result.duration}\n\n` +
+        "⚠️ المدة تقديرية وغير مثبتة؛ اختبر النتائج قبل استخدامها في التداول.\n\n" +
         "لبدء تحليل جديد أرسل /smart"
       );
     }
   });
 }
-
