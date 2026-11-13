@@ -147,4 +147,4 @@ function registerCommands(bot) {
   }, 60 * 1000);
 }
 
-module.exports = { registerCommands };
+export { registerCommands };
