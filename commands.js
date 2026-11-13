@@ -13,20 +13,23 @@ function parsePrice(text) {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function analyzeSmart(high, low, nextOpen) {
-  const midpoint = (high + low) / 2;
+function analyzeSmart(high, low, nextOpen, currentPrice) {
   let signal = "⏳ انتظار";
-  let direction = "الافتتاح داخل نطاق الشمعة السابقة";
+  let direction = "لم يحدث اختراق أو كسر واضح";
 
-  if (nextOpen > high) {
+  if (currentPrice > high && currentPrice > nextOpen) {
     signal = "🟢 شراء UP";
-    direction = "افتتاح أعلى من قمة الشمعة السابقة";
-  } else if (nextOpen < low) {
+    direction = "اختراق القمة مع حركة صاعدة";
+  } else if (currentPrice < low && currentPrice < nextOpen) {
     signal = "🔴 بيع DOWN";
-    direction = "افتتاح أدنى من قاع الشمعة السابقة";
+    direction = "كسر القاع مع حركة هابطة";
   }
 
-  return { midpoint, signal, direction };
+  return {
+    signal,
+    direction,
+    change: currentPrice - nextOpen
+  };
 }
 
 export function registerCommands(bot) {
@@ -43,11 +46,12 @@ export function registerCommands(bot) {
   bot.command("help", async ctx => {
     await ctx.reply(
       "📌 طريقة تحليل Smart\n\n" +
-      "أرسل /smart ثم أدخل القيم بالترتيب:\n\n" +
+      "أرسل /smart ثم أدخل:\n\n" +
       "1️⃣ قمة الشمعة السابقة\n" +
       "2️⃣ قاع الشمعة السابقة\n" +
-      "3️⃣ افتتاح الشمعة التالية\n\n" +
-      "سيظهر التحليل بعد القيمة الثالثة."
+      "3️⃣ افتتاح الشمعة التالية\n" +
+      "4️⃣ السعر الحالي\n\n" +
+      "سيظهر التحليل تلقائياً بعد القيمة الرابعة."
     );
   });
 
@@ -57,7 +61,8 @@ export function registerCommands(bot) {
     sessions.set(key, {
       step: 0,
       high: null,
-      low: null
+      low: null,
+      nextOpen: null
     });
 
     await ctx.reply(
@@ -92,36 +97,34 @@ export function registerCommands(bot) {
     if (session.step === 0) {
       session.high = price;
       session.step = 1;
-
-      await ctx.reply(
-        `✅ القمة: ${price}\n\n` +
-        "أرسل الآن قاع الشمعة السابقة."
-      );
+      await ctx.reply("✅ تم تسجيل القمة.\n\nأرسل قاع الشمعة السابقة.");
       return;
     }
 
     if (session.step === 1) {
       if (price >= session.high) {
-        await ctx.reply(
-          "⚠️ القاع يجب أن يكون أقل من القمة. أرسل القاع الصحيح."
-        );
+        await ctx.reply("⚠️ القاع يجب أن يكون أقل من القمة. أعد إرسال القاع.");
         return;
       }
 
       session.low = price;
       session.step = 2;
-
-      await ctx.reply(
-        `✅ القاع: ${price}\n\n` +
-        "أرسل الآن افتتاح الشمعة التالية."
-      );
+      await ctx.reply("✅ تم تسجيل القاع.\n\nأرسل افتتاح الشمعة التالية.");
       return;
     }
 
     if (session.step === 2) {
+      session.nextOpen = price;
+      session.step = 3;
+      await ctx.reply("✅ تم تسجيل الافتتاح.\n\nأرسل السعر الحالي الآن.");
+      return;
+    }
+
+    if (session.step === 3) {
       const result = analyzeSmart(
         session.high,
         session.low,
+        session.nextOpen,
         price
       );
 
@@ -130,13 +133,14 @@ export function registerCommands(bot) {
       await ctx.reply(
         "📊 تحليل Smart - Masaad\n\n" +
         "⏱ فريم الدقيقة 1M\n\n" +
-        `🔺 القمة: ${session.high}\n` +
-        `🔻 القاع: ${session.low}\n` +
-        `🕯 افتتاح الشمعة التالية: ${price}\n` +
-        `📍 منتصف النطاق: ${result.midpoint.toFixed(5)}\n\n` +
-        `📈 القراءة: ${result.direction}\n` +
+        `🔺 القمة السابقة: ${session.high}\n` +
+        `🔻 القاع السابق: ${session.low}\n` +
+        `🕯 الافتتاح: ${session.nextOpen}\n` +
+        `💰 السعر الحالي: ${price}\n\n` +
+        `📈 الحركة من الافتتاح: ${result.change.toFixed(5)}\n` +
+        `📍 القراءة: ${result.direction}\n\n` +
         `🎯 الإشارة: ${result.signal}\n\n` +
-        "⚠️ قراءة مبدئية وليست ضمانًا لاتجاه السوق.\n\n" +
+        "⚠️ قراءة مبدئية؛ يُفضّل انتظار إغلاق الشمعة لتأكيد الاختراق أو الكسر.\n\n" +
         "لبدء تحليل جديد أرسل /smart"
       );
     }
