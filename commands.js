@@ -1,6 +1,7 @@
 
 const sessions = new Map();
 
+// تحويل السعر إلى رقم
 function parsePrice(text) {
   const normalized = text.trim()
     .replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d))
@@ -13,6 +14,7 @@ function parsePrice(text) {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
+// تحليل الأسعار اليدوي
 function analyzeSmart(high, low, open, current, after10) {
   const range = high - low;
   const movement = after10 - current;
@@ -26,16 +28,22 @@ function analyzeSmart(high, low, open, current, after10) {
   }
 
   const breakoutUp =
-    current <= high && after10 > high && after10 > current;
+    current <= high &&
+    after10 > high &&
+    after10 > current;
 
   const continuationUp =
-    current > high && after10 > current;
+    current > high &&
+    after10 > current;
 
   const breakoutDown =
-    current >= low && after10 < low && after10 < current;
+    current >= low &&
+    after10 < low &&
+    after10 < current;
 
   const continuationDown =
-    current < low && after10 < current;
+    current < low &&
+    after10 < current;
 
   if (breakoutUp || continuationUp) {
     signal = "🟢 شراء UP";
@@ -44,6 +52,7 @@ function analyzeSmart(high, low, open, current, after10) {
       : "استمرار الصعود فوق القمة";
 
     const strength = movement / range;
+
     duration = strength >= 0.25
       ? "30 ثانية"
       : strength >= 0.10
@@ -56,6 +65,7 @@ function analyzeSmart(high, low, open, current, after10) {
       : "استمرار الهبوط تحت القاع";
 
     const strength = Math.abs(movement) / range;
+
     duration = strength >= 0.25
       ? "30 ثانية"
       : strength >= 0.10
@@ -66,11 +76,12 @@ function analyzeSmart(high, low, open, current, after10) {
   return { signal, direction, duration, movement };
 }
 
+// تحليل صورة الشارت باستخدام Gemini
 async function analyzeChartImage(ctx) {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
-    await ctx.reply("⚠️ مفتاح Gemini غير موجود في إعدادات البوت.");
+    await ctx.reply("⚠️ مفتاح Gemini غير موجود في الإعدادات.");
     return;
   }
 
@@ -81,7 +92,7 @@ async function analyzeChartImage(ctx) {
     process.env.TOKEN;
 
   if (!token) {
-    await ctx.reply("⚠️ لم أجد مفتاح اتصال تيليجرام في الإعدادات.");
+    await ctx.reply("⚠️ مفتاح تيليجرام غير موجود في الإعدادات.");
     return;
   }
 
@@ -104,25 +115,41 @@ async function analyzeChartImage(ctx) {
       await imageResponse.arrayBuffer()
     );
 
-    const mimeType = "image/jpeg";
-
     const prompt = `
-أنت مساعد لتحليل صور الشارت فقط.
-حلل صورة أصل Smart في ExpertOption على فريم 5 دقائق إذا كان ظاهراً.
+أنت محلل فني لصور الشارت في ExpertOption Smart.
 
-أجب بالعربية وبالترتيب:
-1- هل الصورة واضحة أم لا؟
-2- لون آخر شمعة مكتملة: خضراء أم حمراء، إذا أمكن رؤيتها.
-3- اتجاه الحركة الظاهر: صاعد أو هابط أو متذبذب.
-4- القمم والقيعان الظاهرة، ولا تخترع أرقاماً غير مقروءة.
-5- هل يوجد اختراق للقمة أو كسر للقاع؟
-6- القراءة: شراء UP أو بيع DOWN أو انتظار.
-7- المدة التجريبية المقترحة: 30 أو 45 أو 60 ثانية.
+حلل الصورة بدقة، ولا تخترع أسعاراً أو مستويات غير ظاهرة.
 
-إذا كانت الصورة لا تكفي لتحديد الاتجاه، قل انتظار.
-لا تخترع أسعاراً أو مؤشرات غير ظاهرة.
-لا تدّعِ أنك تعرف السعر المباشر أو المستقبل.
-اذكر أن التحليل تقديري وليس ضماناً للربح.
+أجب بالعربية بهذا الترتيب:
+
+1. وضوح الصورة.
+2. لون آخر شمعة مكتملة: خضراء أو حمراء أو غير واضح.
+3. اتجاه السوق: صاعد أو هابط أو متذبذب.
+4. القمة والقاع الظاهران.
+5. السعر الحالي إذا كان مقروءاً.
+6. هل يوجد اختراق للقمة أو كسر للقاع؟
+
+7. الإشارة الحالية:
+شراء UP أو بيع DOWN أو انتظار.
+
+8. أقرب فرصة محتملة:
+- فرصة شراء: اذكر مستوى السعر أو الشرط الذي يؤكدها.
+- فرصة بيع: اذكر مستوى السعر أو الشرط الذي يؤكدها.
+- حدد أي الفرصتين أقرب حسب الصورة، أو قل غير واضحة.
+
+9. المدة التجريبية عند تأكيد الفرصة:
+30 أو 45 أو 60 ثانية.
+
+10. سبب اختيار الإشارة وشرط إلغائها.
+
+مهم:
+- فرّق بين الإشارة الحالية والفرصة المحتملة.
+- لا تجبر التحليل على إعطاء شراء أو بيع.
+- لا تخترع أسعاراً أو مؤشرات غير ظاهرة.
+- لا تدّعِ معرفة السعر المباشر أو المستقبل.
+- إذا لم تكن الصورة واضحة، اطلب صورة أوضح.
+- لا تعتبر لون شمعة واحدة دليلاً كافياً للدخول.
+- اذكر أن التحليل تقديري وليس ضماناً للربح.
 `;
 
     const response = await fetch(
@@ -139,7 +166,7 @@ async function analyzeChartImage(ctx) {
               { text: prompt },
               {
                 inline_data: {
-                  mime_type: mimeType,
+                  mime_type: "image/jpeg",
                   data: imageBuffer.toString("base64")
                 }
               }
@@ -163,7 +190,9 @@ async function analyzeChartImage(ctx) {
       .trim();
 
     if (!result) {
-      await ctx.reply("⚠️ لم أستطع قراءة الشارت. أرسل صورة أوضح.");
+      await ctx.reply(
+        "⚠️ لم أستطع قراءة الشارت. أرسل صورة أوضح."
+      );
       return;
     }
 
@@ -183,14 +212,15 @@ async function analyzeChartImage(ctx) {
   }
 }
 
+// تسجيل أوامر البوت
 export function registerCommands(bot) {
 
   bot.command("start", async ctx => {
     await ctx.reply(
       "أهلاً بك في Masaad 🤖\n\n" +
       "📊 تحليل Smart بالصور والأسعار\n\n" +
-      "أرسل صورة الشارت لتحليلها.\n\n" +
-      "/smart - تحليل بالأسعار\n" +
+      "📷 أرسل صورة الشارت لتحليلها.\n\n" +
+      "/smart - تحليل الأسعار يدوياً\n" +
       "/cancel - إلغاء التحليل\n" +
       "/help - المساعدة"
     );
@@ -199,12 +229,14 @@ export function registerCommands(bot) {
   bot.command("help", async ctx => {
     await ctx.reply(
       "📌 مساعدة Masaad\n\n" +
-      "📷 أرسل صورة واضحة للشارت وسيحللها البوت.\n\n" +
-      "أو استخدم /smart لإدخال الأسعار يدوياً.\n\n" +
-      "الفريم المستهدف: 5 دقائق (5M)."
+      "📷 أرسل صورة واضحة لشارت Smart لتحليلها.\n\n" +
+      "أو أرسل /smart لإدخال الأسعار يدوياً.\n\n" +
+      "⏱ الفريم المستهدف: 5 دقائق (5M).\n\n" +
+      "سيعرض البوت الإشارة الحالية وأقرب فرصة محتملة."
     );
   });
 
+  // بدء التحليل اليدوي
   bot.command("smart", async ctx => {
     const key = `${ctx.chat.id}:${ctx.from.id}`;
 
@@ -223,16 +255,21 @@ export function registerCommands(bot) {
     );
   });
 
+  // إلغاء التحليل
   bot.command("cancel", async ctx => {
     const key = `${ctx.chat.id}:${ctx.from.id}`;
+
     sessions.delete(key);
+
     await ctx.reply("✅ تم إلغاء التحليل.");
   });
 
+  // استقبال صور الشارت
   bot.on("message:photo", async ctx => {
     await analyzeChartImage(ctx);
   });
 
+  // استقبال الأسعار اليدوية
   bot.on("message:text", async ctx => {
     const key = `${ctx.chat.id}:${ctx.from.id}`;
     const session = sessions.get(key);
@@ -247,7 +284,8 @@ export function registerCommands(bot) {
 
     if (price === null) {
       await ctx.reply(
-        "⚠️ أرسل السعر فقط بدون رموز.\nمثال: 263.98240"
+        "⚠️ أرسل السعر فقط بدون رموز.\n" +
+        "مثال: 263.98240"
       );
       return;
     }
@@ -255,33 +293,51 @@ export function registerCommands(bot) {
     if (session.step === 0) {
       session.high = price;
       session.step = 1;
-      await ctx.reply("✅ تم تسجيل القمة.\nأرسل قاع الشمعة السابقة المكتملة.");
+
+      await ctx.reply(
+        "✅ تم تسجيل القمة.\n" +
+        "أرسل قاع الشمعة السابقة المكتملة."
+      );
       return;
     }
 
     if (session.step === 1) {
       if (price >= session.high) {
-        await ctx.reply("⚠️ القاع يجب أن يكون أقل من القمة.");
+        await ctx.reply(
+          "⚠️ القاع يجب أن يكون أقل من القمة."
+        );
         return;
       }
 
       session.low = price;
       session.step = 2;
-      await ctx.reply("✅ تم تسجيل القاع.\nأرسل افتتاح الشمعة الجديدة.");
+
+      await ctx.reply(
+        "✅ تم تسجيل القاع.\n" +
+        "أرسل افتتاح الشمعة الجديدة."
+      );
       return;
     }
 
     if (session.step === 2) {
       session.open = price;
       session.step = 3;
-      await ctx.reply("✅ تم تسجيل الافتتاح.\nأرسل السعر الحالي.");
+
+      await ctx.reply(
+        "✅ تم تسجيل الافتتاح.\n" +
+        "أرسل السعر الحالي."
+      );
       return;
     }
 
     if (session.step === 3) {
       session.current = price;
       session.step = 4;
-      await ctx.reply("✅ تم تسجيل السعر الحالي.\nانتظر 10 ثوانٍ ثم أرسل السعر مرة ثانية.");
+
+      await ctx.reply(
+        "✅ تم تسجيل السعر الحالي.\n" +
+        "انتظر 10 ثوانٍ ثم أرسل السعر مرة ثانية."
+      );
       return;
     }
 
@@ -314,3 +370,4 @@ export function registerCommands(bot) {
     }
   });
 }
+
