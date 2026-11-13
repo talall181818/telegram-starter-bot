@@ -1,7 +1,7 @@
 
 {
-  "name": "masaad-bot",
-  "version": "1.0.0",
+  name": "masaad-bot",2
+  "name": "masaad-bot",version": "1.0.0",
   "type": "module",
   "main": "index.js",
   "scripts": {
