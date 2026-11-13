@@ -1,10 +1,11 @@
+
 import { Bot } from "grammy";
 import { registerCommands } from "./commands.js";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
 if (!token) {
-  console.error("TELEGRAM_BOT_TOKEN is missing!");
+  console.error("خطأ: TELEGRAM_BOT_TOKEN غير موجود");
   process.exit(1);
 }
 
