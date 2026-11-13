@@ -21,11 +21,11 @@ function analyzeSmart(high, low, open, current, after10) {
   let direction = "الحركة غير مؤكدة";
   let duration = "لا توجد مدة مقترحة";
 
-  if (
-    current > high &&
-    current > open &&
-    after10 > current
-  ) {
+  if (range <= 0) {
+    return { signal, direction, duration, movement };
+  }
+
+  if (current > high && current > open && after10 > current) {
     signal = "🟢 شراء UP";
     direction = "اختراق القمة واستمرار الصعود";
 
@@ -34,13 +34,7 @@ function analyzeSmart(high, low, open, current, after10) {
     if (strength >= 0.25) duration = "30 ثانية";
     else if (strength >= 0.10) duration = "45 ثانية";
     else duration = "دقيقة واحدة";
-  }
-
-  else if (
-    current < low &&
-    current < open &&
-    after10 < current
-  ) {
+  } else if (current < low && current < open && after10 < current) {
     signal = "🔴 بيع DOWN";
     direction = "كسر القاع واستمرار الهبوط";
 
@@ -51,19 +45,14 @@ function analyzeSmart(high, low, open, current, after10) {
     else duration = "دقيقة واحدة";
   }
 
-  return {
-    signal,
-    direction,
-    duration,
-    movement
-  };
+  return { signal, direction, duration, movement };
 }
 
 export function registerCommands(bot) {
   bot.command("start", async ctx => {
     await ctx.reply(
       "أهلاً بك في Masaad 🤖\n\n" +
-      "📊 تحليل Smart - فريم الدقيقة\n\n" +
+      "📊 تحليل Smart - فريم 5 دقائق\n\n" +
       "/smart - بدء التحليل\n" +
       "/cancel - إلغاء التحليل\n" +
       "/help - المساعدة"
@@ -73,10 +62,11 @@ export function registerCommands(bot) {
   bot.command("help", async ctx => {
     await ctx.reply(
       "📌 طريقة تحليل Smart\n\n" +
+      "الفريم المعتمد: 5 دقائق (5M)\n\n" +
       "أرسل /smart ثم أدخل:\n" +
-      "1- قمة الشمعة السابقة\n" +
-      "2- قاع الشمعة السابقة\n" +
-      "3- افتتاح الشمعة التالية\n" +
+      "1- قمة الشمعة السابقة المكتملة\n" +
+      "2- قاع الشمعة السابقة المكتملة\n" +
+      "3- افتتاح الشمعة الجديدة\n" +
       "4- السعر الحالي\n" +
       "5- السعر بعد 10 ثوانٍ\n\n" +
       "سيحسب البوت الاتجاه والمدة التجريبية."
@@ -96,8 +86,8 @@ export function registerCommands(bot) {
 
     await ctx.reply(
       "📊 تحليل Smart - Masaad\n" +
-      "⏱ فريم الدقيقة 1M\n\n" +
-      "أرسل قمة الشمعة السابقة."
+      "⏱ الفريم: 5 دقائق (5M)\n\n" +
+      "أرسل قمة الشمعة السابقة المكتملة."
     );
   });
 
@@ -126,7 +116,7 @@ export function registerCommands(bot) {
     if (session.step === 0) {
       session.high = price;
       session.step = 1;
-      await ctx.reply("✅ تم تسجيل القمة.\n\nأرسل قاع الشمعة السابقة.");
+      await ctx.reply("✅ تم تسجيل القمة.\n\nأرسل قاع الشمعة السابقة المكتملة.");
       return;
     }
 
@@ -138,7 +128,7 @@ export function registerCommands(bot) {
 
       session.low = price;
       session.step = 2;
-      await ctx.reply("✅ تم تسجيل القاع.\n\nأرسل افتتاح الشمعة التالية.");
+      await ctx.reply("✅ تم تسجيل القاع.\n\nأرسل افتتاح الشمعة الجديدة.");
       return;
     }
 
@@ -155,7 +145,7 @@ export function registerCommands(bot) {
 
       await ctx.reply(
         "✅ تم تسجيل السعر الحالي.\n\n" +
-        "⏳ انتظر 10 ثوانٍ من الآن، ثم أرسل السعر مرة ثانية."
+        "⏳ انتظر 10 ثوانٍ، ثم أرسل السعر مرة ثانية."
       );
       return;
     }
@@ -173,17 +163,17 @@ export function registerCommands(bot) {
 
       await ctx.reply(
         "📊 تحليل Smart - Masaad\n\n" +
-        "⏱ فريم الدقيقة 1M\n\n" +
-        `🔺 القمة: ${session.high}\n` +
-        `🔻 القاع: ${session.low}\n` +
-        `🕯 الافتتاح: ${session.open}\n` +
-        `💰 السعر الأول: ${session.current}\n` +
-        `💰 السعر بعد 10 ثوانٍ: ${price}\n\n` +
+        "⏱ فريم 5 دقائق (5M)\n\n" +
+        `🔺 القمة: ${session.high.toFixed(5)}\n` +
+        `🔻 القاع: ${session.low.toFixed(5)}\n` +
+        `🕯 الافتتاح: ${session.open.toFixed(5)}\n` +
+        `💰 السعر الأول: ${session.current.toFixed(5)}\n` +
+        `💰 السعر بعد 10 ثوانٍ: ${price.toFixed(5)}\n\n` +
         `📈 الحركة خلال 10 ثوانٍ: ${result.movement.toFixed(5)}\n` +
         `📍 القراءة: ${result.direction}\n\n` +
         `🎯 الإشارة: ${result.signal}\n` +
         `⏱ المدة التجريبية: ${result.duration}\n\n` +
-        "⚠️ المدة تقديرية وغير مثبتة؛ اختبر النتائج قبل استخدامها في التداول.\n\n" +
+        "⚠️ الإشارات والمدة تجريبية وليست ضماناً للربح.\n\n" +
         "لبدء تحليل جديد أرسل /smart"
       );
     }
