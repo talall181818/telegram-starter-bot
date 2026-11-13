@@ -1,6 +1,5 @@
 
-const { Bot } = require("grammy");
-const axios = require("axios");
+import axios from "axios";
 
 function calculateEMA(values, period) {
   const k = 2 / (period + 1);
@@ -24,7 +23,6 @@ function calculateRSI(values, period = 14) {
   }
 
   if (losses === 0) return 100;
-
   const rs = gains / losses;
   return 100 - 100 / (1 + rs);
 }
@@ -43,18 +41,16 @@ async function analyzeMarket() {
   );
 
   if (!response.data.values) {
-    throw new Error(response.data.message || "Market data unavailable");
+    throw new Error(response.data.message || "No market data");
   }
 
   const prices = response.data.values
     .map(item => Number(item.close))
     .reverse();
 
-  if (prices.length < 22) {
-    throw new Error("Not enough market data");
-  }
+  if (prices.length < 22) throw new Error("Not enough data");
 
-  const price = prices[prices.length - 1];
+  const price = prices.at(-1);
   const ema9 = calculateEMA(prices, 9);
   const ema21 = calculateEMA(prices, 21);
   const rsi = calculateRSI(prices);
@@ -65,74 +61,53 @@ async function analyzeMarket() {
   if (ema9 > ema21 && price > ema9 && rsi >= 52 && rsi <= 68) {
     signal = "🟢 شراء UP";
     duration = "دقيقة واحدة";
-  } else if (
-    ema9 < ema21 &&
-    price < ema9 &&
-    rsi >= 32 &&
-    rsi <= 48
-  ) {
+  } else if (ema9 < ema21 && price < ema9 && rsi >= 32 && rsi <= 48) {
     signal = "🔴 بيع DOWN";
     duration = "دقيقتان";
   }
 
-  return {
-    price,
-    ema9,
-    ema21,
-    rsi,
-    signal,
-    duration
-  };
+  return { price, ema9, ema21, rsi, signal, duration };
 }
 
 async function sendAnalysis(bot, chatId) {
-  const data = await analyzeMarket();
+  const d = await analyzeMarket();
 
-  const message =
+  await bot.api.sendMessage(
+    chatId,
     "📊 تحليل اليورو دولار - Masaad\n\n" +
-    "⏱ فريم التحليل: دقيقة واحدة\n\n" +
-    "السعر: " + data.price.toFixed(5) + "\n" +
-    "EMA 9: " + data.ema9.toFixed(5) + "\n" +
-    "EMA 21: " + data.ema21.toFixed(5) + "\n" +
-    "RSI: " + data.rsi.toFixed(2) + "\n\n" +
-    "الإشارة: " + data.signal + "\n" +
-    "المدة المقترحة: " + data.duration + "\n\n" +
-    "⚠️ الإشارات تحليلية وليست ضماناً للربح.";
-
-  await bot.api.sendMessage(chatId, message);
+    "⏱ فريم دقيقة واحدة\n\n" +
+    "السعر: " + d.price.toFixed(5) + "\n" +
+    "EMA 9: " + d.ema9.toFixed(5) + "\n" +
+    "EMA 21: " + d.ema21.toFixed(5) + "\n" +
+    "RSI: " + d.rsi.toFixed(2) + "\n\n" +
+    "الإشارة: " + d.signal + "\n" +
+    "المدة المقترحة: " + d.duration + "\n\n" +
+    "⚠️ تحليل فقط وليس ضماناً للربح."
+  );
 }
 
-function registerCommands(bot) {
+export function registerCommands(bot) {
   const subscribers = new Set();
 
   bot.command("start", async ctx => {
     subscribers.add(ctx.chat.id);
-    await ctx.reply(
-      "أهلاً بك في Masaad 🤖\n" +
-      "تم تفعيل التحليل التلقائي لليورو دولار.\n" +
-      "يتم تحديث التحليل كل دقيقة."
-    );
+    await ctx.reply("أهلاً بك في Masaad 🤖\nتم تفعيل التحليل التلقائي كل دقيقة.");
   });
 
-  bot.command("help", async ctx => {
-    await ctx.reply(
-      "أوامر Masaad:\n" +
-      "/start تشغيل التحليل التلقائي\n" +
-      "/gold تحليل اليورو دولار الآن\n" +
-      "/stop إيقاف الإشعارات التلقائية"
-    );
-  });
+  bot.command("help", ctx =>
+    ctx.reply("/start تشغيل التحديث التلقائي\n/gold تحليل الآن\n/stop إيقاف التحديث")
+  );
 
-  bot.command("stop", async ctx => {
+  bot.command("stop", ctx => {
     subscribers.delete(ctx.chat.id);
-    await ctx.reply("تم إيقاف الإشعارات التلقائية.");
+    return ctx.reply("تم إيقاف التحديث التلقائي.");
   });
 
   bot.command("gold", async ctx => {
     try {
       await sendAnalysis(bot, ctx.chat.id);
-    } catch (error) {
-      await ctx.reply("تعذر جلب التحليل حالياً. حاول لاحقاً.");
+    } catch (e) {
+      await ctx.reply("تعذر جلب البيانات: " + e.message);
     }
   });
 
@@ -140,11 +115,9 @@ function registerCommands(bot) {
     for (const chatId of subscribers) {
       try {
         await sendAnalysis(bot, chatId);
-      } catch (error) {
-        console.error("Analysis error:", error.message);
+      } catch (e) {
+        console.error(e.message);
       }
     }
   }, 60 * 1000);
 }
-
-export { registerCommands };
