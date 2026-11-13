@@ -1,175 +1,150 @@
 
-const API_KEY = process.env.TWELVEDATA_API_KEY;
+const { Bot } = require("grammy");
+const axios = require("axios");
 
-function ema(values, period) {
+function calculateEMA(values, period) {
   const k = 2 / (period + 1);
-  let result = values[0];
+  let ema = values[0];
 
   for (let i = 1; i < values.length; i++) {
-    result = values[i] * k + result * (1 - k);
+    ema = values[i] * k + ema * (1 - k);
   }
 
-  return result;
+  return ema;
 }
 
 function calculateRSI(values, period = 14) {
-  if (values.length <= period) return 50;
-
   let gains = 0;
   let losses = 0;
 
-  for (let i = 1; i <= period; i++) {
+  for (let i = values.length - period; i < values.length; i++) {
     const change = values[i] - values[i - 1];
-    gains += Math.max(change, 0);
-    losses += Math.max(-change, 0);
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
   }
 
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
+  if (losses === 0) return 100;
 
-  for (let i = period + 1; i < values.length; i++) {
-    const change = values[i] - values[i - 1];
-
-    avgGain =
-      (avgGain * (period - 1) + Math.max(change, 0)) / period;
-
-    avgLoss =
-      (avgLoss * (period - 1) + Math.max(-change, 0)) / period;
-  }
-
-  if (avgLoss === 0) return 100;
-
-  const rs = avgGain / avgLoss;
+  const rs = gains / losses;
   return 100 - 100 / (1 + rs);
 }
 
-async function analyze(ctx, symbol, name) {
-  try {
-    if (!API_KEY) {
-      return ctx.reply("⚠️ مفتاح الأسعار غير موجود.");
+async function analyzeMarket() {
+  const response = await axios.get(
+    "https://api.twelvedata.com/time_series",
+    {
+      params: {
+        symbol: "EUR/USD",
+        interval: "1min",
+        outputsize: 60,
+        apikey: process.env.TWELVEDATA_API_KEY
+      }
     }
+  );
 
-    const url =
-      "https://api.twelvedata.com/time_series" +
-      "?symbol=" + encodeURIComponent(symbol) +
-      "&interval=1min&outputsize=100&apikey=" + API_KEY;
-
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (
-      !response.ok ||
-      !data.values ||
-      data.values.length < 35
-    ) {
-      console.error("Data error:", data);
-      return ctx.reply("⚠️ بيانات السوق غير متوفرة حاليًا.");
-    }
-
-    // استبعاد الشمعة الحالية غير المكتملة
-    const candles = data.values
-      .slice(1)
-      .reverse()
-      .map(c => ({
-        open: Number(c.open),
-        high: Number(c.high),
-        low: Number(c.low),
-        close: Number(c.close)
-      }));
-
-    const prices = candles.map(c => c.close);
-
-    const current = candles[candles.length - 1];
-    const previous = candles[candles.length - 2];
-
-    const price = current.close;
-
-    const ema9 = ema(prices.slice(-40), 9);
-    const ema21 = ema(prices.slice(-60), 21);
-    const rsi = calculateRSI(prices);
-
-    const bullish = current.close > current.open;
-    const bearish = current.close < current.open;
-
-    const upTrend = ema9 > ema21;
-    const downTrend = ema9 < ema21;
-
-    const rising = current.close > previous.close;
-    const falling = current.close < previous.close;
-
-    // نظام شراء متوازن
-    const buySignal =
-      upTrend &&
-      price > ema9 &&
-      bullish &&
-      rising &&
-      rsi >= 50 &&
-      rsi <= 68;
-
-    // نظام بيع متوازن
-    const sellSignal =
-      downTrend &&
-      price < ema9 &&
-      bearish &&
-      falling &&
-      rsi >= 32 &&
-      rsi <= 50;
-
-    let signal = "⏳ انتظار";
-    let duration = "لا توجد مدة مقترحة";
-
-    if (buySignal) {
-      signal = "🟢 شراء UP";
-      duration = rsi >= 58 ? "دقيقتان" : "دقيقة واحدة";
-    } else if (sellSignal) {
-      signal = "🔴 بيع DOWN";
-      duration = rsi <= 42 ? "دقيقتان" : "دقيقة واحدة";
-    }
-
-    const decimals = symbol === "XAU/USD" ? 2 : 5;
-
-    const reply =
-      "📊 تحليل " + name + "\n\n" +
-      "⏱ فريم التحليل: دقيقة واحدة\n\n" +
-      "السعر: " + price.toFixed(decimals) + "\n" +
-      "EMA 9: " + ema9.toFixed(decimals) + "\n" +
-      "EMA 21: " + ema21.toFixed(decimals) + "\n" +
-      "RSI: " + rsi.toFixed(2) + "\n\n" +
-      "الإشارة: " + signal + "\n" +
-      "المدة المقترحة: " + duration + "\n\n" +
-      "⚠️ الإشارات تحليلية وليست ضمانًا للربح.";
-
-    return ctx.reply(reply);
-
-  } catch (error) {
-    console.error("Analysis error:", error);
-    return ctx.reply("⚠️ حدث خطأ أثناء التحليل.");
+  if (!response.data.values) {
+    throw new Error(response.data.message || "Market data unavailable");
   }
+
+  const prices = response.data.values
+    .map(item => Number(item.close))
+    .reverse();
+
+  if (prices.length < 22) {
+    throw new Error("Not enough market data");
+  }
+
+  const price = prices[prices.length - 1];
+  const ema9 = calculateEMA(prices, 9);
+  const ema21 = calculateEMA(prices, 21);
+  const rsi = calculateRSI(prices);
+
+  let signal = "⏳ انتظار";
+  let duration = "لا توجد مدة";
+
+  if (ema9 > ema21 && price > ema9 && rsi >= 52 && rsi <= 68) {
+    signal = "🟢 شراء UP";
+    duration = "دقيقة واحدة";
+  } else if (
+    ema9 < ema21 &&
+    price < ema9 &&
+    rsi >= 32 &&
+    rsi <= 48
+  ) {
+    signal = "🔴 بيع DOWN";
+    duration = "دقيقتان";
+  }
+
+  return {
+    price,
+    ema9,
+    ema21,
+    rsi,
+    signal,
+    duration
+  };
 }
 
-export function registerCommands(bot) {
+async function sendAnalysis(bot, chatId) {
+  const data = await analyzeMarket();
 
-  bot.command("start", ctx =>
-    ctx.reply(
-      "أهلاً بك في Masaad 🤖\n\n" +
-      "تحليل الذهب واليورو دولار.\n" +
-      "أرسل /help للمساعدة."
-    )
-  );
+  const message =
+    "📊 تحليل اليورو دولار - Masaad\n\n" +
+    "⏱ فريم التحليل: دقيقة واحدة\n\n" +
+    "السعر: " + data.price.toFixed(5) + "\n" +
+    "EMA 9: " + data.ema9.toFixed(5) + "\n" +
+    "EMA 21: " + data.ema21.toFixed(5) + "\n" +
+    "RSI: " + data.rsi.toFixed(2) + "\n\n" +
+    "الإشارة: " + data.signal + "\n" +
+    "المدة المقترحة: " + data.duration + "\n\n" +
+    "⚠️ الإشارات تحليلية وليست ضماناً للربح.";
 
-  bot.command("help", ctx =>
-    ctx.reply(
-      "📌 أوامر Masaad\n\n" +
-      "/gold - تحليل الذهب\n" +
-      "/eurusd - تحليل اليورو دولار"
-    )
-  );
-
-  bot.command("gold", ctx =>
-    analyze(ctx, "XAU/USD", "الذهب")
-  );
-
-  bot.command("eurusd", ctx =>
-    analyze(ctx, "EUR/USD", "اليورو دولار")
-  );
+  await bot.api.sendMessage(chatId, message);
 }
+
+function registerCommands(bot) {
+  const subscribers = new Set();
+
+  bot.command("start", async ctx => {
+    subscribers.add(ctx.chat.id);
+    await ctx.reply(
+      "أهلاً بك في Masaad 🤖\n" +
+      "تم تفعيل التحليل التلقائي لليورو دولار.\n" +
+      "يتم تحديث التحليل كل دقيقة."
+    );
+  });
+
+  bot.command("help", async ctx => {
+    await ctx.reply(
+      "أوامر Masaad:\n" +
+      "/start تشغيل التحليل التلقائي\n" +
+      "/gold تحليل اليورو دولار الآن\n" +
+      "/stop إيقاف الإشعارات التلقائية"
+    );
+  });
+
+  bot.command("stop", async ctx => {
+    subscribers.delete(ctx.chat.id);
+    await ctx.reply("تم إيقاف الإشعارات التلقائية.");
+  });
+
+  bot.command("gold", async ctx => {
+    try {
+      await sendAnalysis(bot, ctx.chat.id);
+    } catch (error) {
+      await ctx.reply("تعذر جلب التحليل حالياً. حاول لاحقاً.");
+    }
+  });
+
+  setInterval(async () => {
+    for (const chatId of subscribers) {
+      try {
+        await sendAnalysis(bot, chatId);
+      } catch (error) {
+        console.error("Analysis error:", error.message);
+      }
+    }
+  }, 60 * 1000);
+}
+
+module.exports = { registerCommands };
