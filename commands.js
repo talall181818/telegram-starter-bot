@@ -1,159 +1,175 @@
 
 const sessions = new Map();
 
-// تحويل السعر إلى رقم
-function parsePrice(text) {
-  const normalized = text.trim()
+function normalizeNumber(text) {
+  const normalized = String(text)
     .replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d))
     .replace(/٫/g, ".")
-    .replace(/,/g, ".");
-
-  if (!/^\d+(\.\d+)?$/.test(normalized)) return null;
+    .replace(/٬/g, "")
+    .replace(/,/g, "")
+    .replace(/[^\d.-]/g, "");
 
   const value = Number(normalized);
-  return Number.isFinite(value) && value > 0 ? value : null;
+  return Number.isFinite(value) ? value : null;
 }
 
-// تحليل الأسعار اليدوي
-function analyzeSmart(high, low, open, current, after10) {
-  const range = high - low;
-  const movement = after10 - current;
-
-  let signal = "⏳ انتظار";
-  let direction = "الحركة غير مؤكدة";
-  let duration = "لا توجد مدة مقترحة";
-
-  if (range <= 0) {
-    return { signal, direction, duration, movement };
-  }
-
-  const breakoutUp =
-    current <= high &&
-    after10 > high &&
-    after10 > current;
-
-  const continuationUp =
-    current > high &&
-    after10 > current;
-
-  const breakoutDown =
-    current >= low &&
-    after10 < low &&
-    after10 < current;
-
-  const continuationDown =
-    current < low &&
-    after10 < current;
-
-  if (breakoutUp || continuationUp) {
-    signal = "🟢 شراء UP";
-    direction = breakoutUp
-      ? "اختراق القمة خلال 10 ثوانٍ"
-      : "استمرار الصعود فوق القمة";
-
-    const strength = movement / range;
-
-    duration = strength >= 0.25
-      ? "30 ثانية"
-      : strength >= 0.10
-        ? "45 ثانية"
-        : "دقيقة واحدة";
-  } else if (breakoutDown || continuationDown) {
-    signal = "🔴 بيع DOWN";
-    direction = breakoutDown
-      ? "كسر القاع خلال 10 ثوانٍ"
-      : "استمرار الهبوط تحت القاع";
-
-    const strength = Math.abs(movement) / range;
-
-    duration = strength >= 0.25
-      ? "30 ثانية"
-      : strength >= 0.10
-        ? "45 ثانية"
-        : "دقيقة واحدة";
-  }
-
-  return { signal, direction, duration, movement };
-}
-
-// تحليل صورة الشارت باستخدام Gemini
-async function analyzeChartImage(ctx) {
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    await ctx.reply("⚠️ مفتاح Gemini غير موجود في الإعدادات.");
-    return;
-  }
-
-  const token =
+function getToken(bot) {
+  return (
+    bot.token ||
     process.env.TELEGRAM_BOT_TOKEN ||
     process.env.BOT_TOKEN ||
     process.env.TELEGRAM_TOKEN ||
-    process.env.TOKEN;
+    process.env.TOKEN
+  );
+}
 
-  if (!token) {
-    await ctx.reply("⚠️ مفتاح تيليجرام غير موجود في الإعدادات.");
+function buildManualAnalysis(values) {
+  const [high, low, open, current, later] = values;
+
+  const range = high - low;
+  const movement = later - current;
+  const candleMove = current - open;
+
+  let direction = "شراء UP";
+  let reason = "الأسعار تميل للصعود";
+  let confidence = "ضعيف";
+
+  if (movement > 0 && candleMove > 0) {
+    direction = "شراء UP";
+    reason = "السعر أعلى من الافتتاح ويتحرك صعودًا";
+    confidence = "متوسط";
+  } else if (movement < 0 && candleMove < 0) {
+    direction = "بيع DOWN";
+    reason = "السعر أقل من الافتتاح ويتحرك هبوطًا";
+    confidence = "متوسط";
+  } else if (movement > 0) {
+    direction = "شراء UP";
+    reason = "الحركة الأخيرة صاعدة رغم اختلاف حركة الشمعة";
+  } else if (movement < 0) {
+    direction = "بيع DOWN";
+    reason = "الحركة الأخيرة هابطة رغم اختلاف حركة الشمعة";
+  } else {
+    direction = candleMove >= 0 ? "شراء UP" : "بيع DOWN";
+    reason = "الحركة غير واضحة، وهذا مجرد ترجيح";
+  }
+
+  if (range > 0 && Math.abs(movement) > range * 0.08) {
+    confidence = "متوسط";
+  }
+
+  let duration = 30;
+  if (Math.abs(movement) > range * 0.15) duration = 45;
+  if (Math.abs(movement) > range * 0.3) duration = 60;
+
+  return (
+    "📊 تحليل Smart - Masaad\n\n" +
+    "⏱️ الفريم: 5 دقائق\n" +
+    `🔺 أعلى الشمعة السابقة: ${high}\n` +
+    `🔻 أدنى الشمعة السابقة: ${low}\n` +
+    `افتتاح الشمعة: ${open}\n` +
+    `السعر الحالي: ${current}\n` +
+    `السعر بعد 10 ثوانٍ: ${later}\n\n` +
+    `🎯 أفضل ترجيح: ${direction}\n` +
+    `📈 قوة الترجيح: ${confidence}\n` +
+    `🧭 السبب: ${reason}\n` +
+    `⏳ المدة التجريبية: ${duration} ثانية\n\n` +
+    "⚠️ هذا ترجيح آلي مبسط وليس إشارة مؤكدة. لا تدخل إذا كانت الحركة متذبذبة."
+  );
+}
+
+async function analyzeChartImage(ctx) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const token = getToken(ctx.me ? ctx.api : ctx.bot);
+
+  if (!apiKey) {
+    await ctx.reply("⚠️ مفتاح GEMINI_API_KEY غير موجود في إعدادات الاستضافة.");
     return;
   }
 
-  await ctx.reply("⏳ استلمت صورة الشارت. جارٍ قراءة الشموع...");
-
   try {
-    const photo = ctx.message.photo.at(-1);
+    await ctx.reply("⏳ استلمت صورة الشارت. جارٍ تحليلها...");
+
+    const photos = ctx.message.photo;
+    const photo = photos[photos.length - 1];
+
     const file = await ctx.api.getFile(photo.file_id);
 
-    const telegramUrl =
-      `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-
-    const imageResponse = await fetch(telegramUrl);
-
-    if (!imageResponse.ok) {
-      throw new Error("تعذر تحميل الصورة من تيليجرام");
+    if (!file.file_path) {
+      throw new Error("تعذر الحصول على مسار الصورة من تيليجرام.");
     }
 
-    const imageBuffer = Buffer.from(
-      await imageResponse.arrayBuffer()
-    );
+    const botToken = ctx.api.token;
+    const imageUrl =
+      `https://api.telegram.org/file/bot${botToken}/${file.file_path}`;
+
+    const imageResponse = await fetch(imageUrl);
+
+    if (!imageResponse.ok) {
+      throw new Error("تعذر تحميل صورة الشارت.");
+    }
+
+    const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+
+    if (imageBuffer.length > 15 * 1024 * 1024) {
+      await ctx.reply("⚠️ الصورة كبيرة جدًا. أرسل صورة أصغر.");
+      return;
+    }
+
+    const mimeType = file.file_path.endsWith(".png")
+      ? "image/png"
+      : file.file_path.endsWith(".webp")
+      ? "image/webp"
+      : "image/jpeg";
 
     const prompt = `
-أنت محلل فني لصور الشارت في ExpertOption Smart.
+أنت مساعد تحليل فني بصري لشارت ExpertOption Smart.
+حلل الصورة المرفقة فقط. لا تدّع أنك ترى الأسعار الحية أو تعرف ما سيحدث مستقبلًا.
 
-حلل الصورة بدقة، ولا تخترع أسعاراً أو مستويات غير ظاهرة.
+المطلوب:
+1. صف اتجاه الشموع الأخيرة: صاعد أو هابط أو متذبذب.
+2. حدد لون آخر شمعة مكتملة إن كان واضحًا.
+3. اقرأ السعر وأقرب قمة وقاع ومستويات المقاومة والدعم الظاهرة فقط.
+4. هل يوجد اختراق أو كسر واضح؟ لا تخترع مستويات غير مقروءة.
+5. أعطني أفضل ترجيح اتجاهي الآن، ولا تجعل الإجابة كلها انتظارًا:
+   - شراء UP إذا كانت دلائل الصعود أقوى.
+   - بيع DOWN إذا كانت دلائل الهبوط أقوى.
+   - إذا كانت الصورة غير واضحة جدًا، قل إن الترجيح غير موثوق واختر الاتجاه الأقرب فقط إذا أمكن.
+6. اكتب درجة الترجيح: ضعيف أو متوسط أو قوي.
+7. اكتب أقرب فرصة شراء محتملة وشرط تحققها.
+8. اكتب أقرب فرصة بيع محتملة وشرط تحققها.
+9. اختر الأقرب بين فرصتي الشراء والبيع.
+10. اقترح مدة تجريبية واحدة: 30 أو 45 أو 60 ثانية، واذكر سبب الاختيار.
+11. اذكر متى تلغى الفكرة أو يصبح الدخول غير مناسب.
 
-أجب بالعربية بهذا الترتيب:
+اكتب بالعربية وبشكل واضح بهذا التنسيق:
 
-1. وضوح الصورة.
-2. لون آخر شمعة مكتملة: خضراء أو حمراء أو غير واضح.
-3. اتجاه السوق: صاعد أو هابط أو متذبذب.
-4. القمة والقاع الظاهران.
-5. السعر الحالي إذا كان مقروءاً.
-6. هل يوجد اختراق للقمة أو كسر للقاع؟
+📊 تحليل Smart - Masaad
 
-7. الإشارة الحالية:
-شراء UP أو بيع DOWN أو انتظار.
+📈 اتجاه الشارت:
+🕯️ آخر شمعة مكتملة:
+💰 السعر الظاهر:
+🔺 المقاومة:
+🔻 الدعم:
 
-8. أقرب فرصة محتملة:
-- فرصة شراء: اذكر مستوى السعر أو الشرط الذي يؤكدها.
-- فرصة بيع: اذكر مستوى السعر أو الشرط الذي يؤكدها.
-- حدد أي الفرصتين أقرب حسب الصورة، أو قل غير واضحة.
+🎯 أفضل ترجيح الآن: شراء UP أو بيع DOWN
+📊 قوة الترجيح: ضعيف / متوسط / قوي
+⏳ المدة التجريبية: 30 أو 45 أو 60 ثانية
 
-9. المدة التجريبية عند تأكيد الفرصة:
-30 أو 45 أو 60 ثانية.
-
-10. سبب اختيار الإشارة وشرط إلغائها.
+🟢 فرصة الشراء:
+🔴 فرصة البيع:
+⭐ الفرصة الأقرب:
+⚠️ شرط إلغاء الترجيح:
 
 مهم:
-- فرّق بين الإشارة الحالية والفرصة المحتملة.
-- لا تجبر التحليل على إعطاء شراء أو بيع.
-- لا تخترع أسعاراً أو مؤشرات غير ظاهرة.
-- لا تدّعِ معرفة السعر المباشر أو المستقبل.
-- إذا لم تكن الصورة واضحة، اطلب صورة أوضح.
-- لا تعتبر لون شمعة واحدة دليلاً كافياً للدخول.
-- اذكر أن التحليل تقديري وليس ضماناً للربح.
+- أعطني ترجيحًا اتجاهيًا بدل تكرار كلمة انتظار.
+- لا تصف الترجيح بأنه مؤكد إذا لم يوجد تأكيد.
+- لا تخترع أسعارًا أو أرقامًا غير ظاهرة.
+- إذا كانت الصورة لا تسمح بقراءة السعر، اكتب "غير واضح".
+- لا تضمن الربح ولا تقدم مدة على أنها مضمونة.
 `;
 
     const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
       {
         method: "POST",
         headers: {
@@ -161,213 +177,135 @@ async function analyzeChartImage(ctx) {
           "x-goog-api-key": apiKey
         },
         body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: prompt },
-              {
-                inline_data: {
-                  mime_type: "image/jpeg",
-                  data: imageBuffer.toString("base64")
+          contents: [
+            {
+              parts: [
+                { text: prompt },
+                {
+                  inline_data: {
+                    mime_type: mimeType,
+                    data: imageBuffer.toString("base64")
+                  }
                 }
-              }
-            ]
-          }]
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 1200
+          }
         })
       }
     );
 
-    const data = await response.json();
+    const result = await response.json();
 
     if (!response.ok) {
+      console.error("Gemini API error:", result);
       throw new Error(
-        data.error?.message || "خطأ في خدمة Gemini"
+        result.error?.message || "حدث خطأ أثناء الاتصال بخدمة التحليل."
       );
     }
 
-    const result = data.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || "")
-      .join("\n")
-      .trim();
+    const answer =
+      result.candidates?.[0]?.content?.parts
+        ?.map(part => part.text || "")
+        .join("\n")
+        .trim();
 
-    if (!result) {
-      await ctx.reply(
-        "⚠️ لم أستطع قراءة الشارت. أرسل صورة أوضح."
-      );
-      return;
+    if (!answer) {
+      throw new Error("لم يرجع التحليل نتيجة. حاول بصورة أوضح.");
     }
 
-    await ctx.reply(
-      "📊 تحليل صورة Smart - Masaad\n\n" +
-      result +
-      "\n\n⚠️ التحليل تقديري وليس ضماناً للربح."
-    );
+    await ctx.reply(answer);
 
   } catch (error) {
     console.error("Image analysis error:", error);
-
     await ctx.reply(
-      "⚠️ تعذر تحليل الصورة.\n" +
-      "تأكد من مفتاح Gemini وحاول مرة أخرى."
+      "⚠️ تعذر تحليل الصورة هذه المرة.\n" +
+      "تأكد أن الصورة واضحة وأن مفتاح Gemini مضبوط في الاستضافة."
     );
   }
 }
 
-// تسجيل أوامر البوت
 export function registerCommands(bot) {
-
   bot.command("start", async ctx => {
+    sessions.delete(ctx.from.id);
+
     await ctx.reply(
       "أهلاً بك في Masaad 🤖\n\n" +
-      "📊 تحليل Smart بالصور والأسعار\n\n" +
-      "📷 أرسل صورة الشارت لتحليلها.\n\n" +
-      "/smart - تحليل الأسعار يدوياً\n" +
-      "/cancel - إلغاء التحليل\n" +
-      "/help - المساعدة"
+      "📊 تحليل شارت Smart\n\n" +
+      "📷 أرسل صورة الشارت لتحليلها.\n" +
+      "/smart - تحليل الأسعار يدويًا\n" +
+      "/help - المساعدة\n" +
+      "/cancel - إلغاء الإدخال"
     );
   });
 
   bot.command("help", async ctx => {
     await ctx.reply(
-      "📌 مساعدة Masaad\n\n" +
-      "📷 أرسل صورة واضحة لشارت Smart لتحليلها.\n\n" +
-      "أو أرسل /smart لإدخال الأسعار يدوياً.\n\n" +
-      "⏱ الفريم المستهدف: 5 دقائق (5M).\n\n" +
-      "سيعرض البوت الإشارة الحالية وأقرب فرصة محتملة."
+      "📖 قائمة أوامر Masaad\n\n" +
+      "📷 أرسل صورة شارت Smart لتحليلها.\n\n" +
+      "/smart - إدخال خمسة أسعار للتحليل\n" +
+      "/cancel - إلغاء الإدخال\n" +
+      "/start - القائمة الرئيسية"
     );
   });
 
-  // بدء التحليل اليدوي
-  bot.command("smart", async ctx => {
-    const key = `${ctx.chat.id}:${ctx.from.id}`;
+  bot.command("cancel", async ctx => {
+    sessions.delete(ctx.from.id);
+    await ctx.reply("تم إلغاء الإدخال.");
+  });
 
-    sessions.set(key, {
+  bot.command("smart", async ctx => {
+    sessions.set(ctx.from.id, {
       step: 0,
-      high: null,
-      low: null,
-      open: null,
-      current: null
+      values: []
     });
 
     await ctx.reply(
-      "📊 تحليل Smart - Masaad\n\n" +
-      "⏱ الفريم: 5 دقائق (5M)\n\n" +
-      "أرسل قمة الشمعة السابقة المكتملة."
+      "📊 تحليل Smart اليدوي\n\n" +
+      "أرسل أعلى سعر للشمعة السابقة:"
     );
   });
 
-  // إلغاء التحليل
-  bot.command("cancel", async ctx => {
-    const key = `${ctx.chat.id}:${ctx.from.id}`;
-
-    sessions.delete(key);
-
-    await ctx.reply("✅ تم إلغاء التحليل.");
-  });
-
-  // استقبال صور الشارت
   bot.on("message:photo", async ctx => {
+    sessions.delete(ctx.from.id);
     await analyzeChartImage(ctx);
   });
 
-  // استقبال الأسعار اليدوية
   bot.on("message:text", async ctx => {
-    const key = `${ctx.chat.id}:${ctx.from.id}`;
-    const session = sessions.get(key);
+    const userId = ctx.from.id;
+    const session = sessions.get(userId);
 
     if (!session) return;
 
-    const text = ctx.message.text.trim();
+    const value = normalizeNumber(ctx.message.text);
 
-    if (text.startsWith("/")) return;
-
-    const price = parsePrice(text);
-
-    if (price === null) {
-      await ctx.reply(
-        "⚠️ أرسل السعر فقط بدون رموز.\n" +
-        "مثال: 263.98240"
-      );
+    if (value === null) {
+      await ctx.reply("⚠️ أرسل رقم السعر فقط، مثال: 264.2505");
       return;
     }
 
-    if (session.step === 0) {
-      session.high = price;
-      session.step = 1;
+    const questions = [
+      "أرسل أدنى سعر للشمعة السابقة:",
+      "أرسل سعر افتتاح الشمعة الجديدة:",
+      "أرسل السعر الحالي:",
+      "أرسل السعر بعد 10 ثوانٍ:"
+    ];
 
-      await ctx.reply(
-        "✅ تم تسجيل القمة.\n" +
-        "أرسل قاع الشمعة السابقة المكتملة."
-      );
+    session.values.push(value);
+    session.step++;
+
+    if (session.step < 5) {
+      await ctx.reply(questions[session.step - 1]);
       return;
     }
 
-    if (session.step === 1) {
-      if (price >= session.high) {
-        await ctx.reply(
-          "⚠️ القاع يجب أن يكون أقل من القمة."
-        );
-        return;
-      }
+    const result = buildManualAnalysis(session.values);
+    sessions.delete(userId);
 
-      session.low = price;
-      session.step = 2;
-
-      await ctx.reply(
-        "✅ تم تسجيل القاع.\n" +
-        "أرسل افتتاح الشمعة الجديدة."
-      );
-      return;
-    }
-
-    if (session.step === 2) {
-      session.open = price;
-      session.step = 3;
-
-      await ctx.reply(
-        "✅ تم تسجيل الافتتاح.\n" +
-        "أرسل السعر الحالي."
-      );
-      return;
-    }
-
-    if (session.step === 3) {
-      session.current = price;
-      session.step = 4;
-
-      await ctx.reply(
-        "✅ تم تسجيل السعر الحالي.\n" +
-        "انتظر 10 ثوانٍ ثم أرسل السعر مرة ثانية."
-      );
-      return;
-    }
-
-    if (session.step === 4) {
-      const result = analyzeSmart(
-        session.high,
-        session.low,
-        session.open,
-        session.current,
-        price
-      );
-
-      sessions.delete(key);
-
-      await ctx.reply(
-        "📊 تحليل Smart - Masaad\n\n" +
-        "⏱ فريم 5 دقائق (5M)\n\n" +
-        `🔺 القمة: ${session.high.toFixed(5)}\n` +
-        `🔻 القاع: ${session.low.toFixed(5)}\n` +
-        `🕯 الافتتاح: ${session.open.toFixed(5)}\n` +
-        `💰 السعر الأول: ${session.current.toFixed(5)}\n` +
-        `💰 السعر بعد 10 ثوانٍ: ${price.toFixed(5)}\n\n` +
-        `📈 الحركة: ${result.movement.toFixed(5)}\n` +
-        `📍 القراءة: ${result.direction}\n` +
-        `🎯 الإشارة: ${result.signal}\n` +
-        `⏱ المدة التجريبية: ${result.duration}\n\n` +
-        "⚠️ الإشارات تجريبية وليست ضماناً للربح.\n" +
-        "لبدء تحليل جديد أرسل /smart"
-      );
-    }
+    await ctx.reply(result);
   });
 }
 
