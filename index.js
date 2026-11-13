@@ -9,9 +9,8 @@
 // Handlers live in src/commands.js. This file only wires things up.
 
 import http from "node:http"
-import { Bot, webhookCallback } from "grammy"
-import { registerCommands } from "./src/commands.js"
-
+import { Bot, webhookCallback } from 
+import { registerCommands } from "./commands.js"
 const token = process.env.TELEGRAM_BOT_TOKEN
 if (!token) {
   console.error("TELEGRAM_BOT_TOKEN is missing. Open Telegram, talk to @BotFather, send /newbot, and set the token it gives you as an environment variable.")
