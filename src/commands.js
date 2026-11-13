@@ -1,199 +1,195 @@
 
-import axios from "axios";
+const REQUIRED_CANDLES = 5;
+const sessions = new Map();
 
-function calculateEMA(values, period) {
-  const k = 2 / (period + 1);
-  let ema = values[0];
+function parsePrice(text) {
+  const normalized = text
+    .trim()
+    .replace(/[٠-٩]/g, digit => "٠١٢٣٤٥٦٧٨٩".indexOf(digit))
+    .replace(/٫/g, ".")
+    .replace(/,/g, ".");
 
-  for (let i = 1; i < values.length; i++) {
-    ema = values[i] * k + ema * (1 - k);
+  if (!/^\d+(\.\d+)?$/.test(normalized)) {
+    return null;
   }
 
-  return ema;
+  const value = Number(normalized);
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function calculateRSI(values, period = 14) {
-  let gains = 0;
-  let losses = 0;
+function analyzeSmart(candles) {
+  const midpoints = candles.map(c => (c.high + c.low) / 2);
 
-  for (let i = values.length - period; i < values.length; i++) {
-    const change = values[i] - values[i - 1];
+  let up = 0;
+  let down = 0;
 
-    if (change > 0) gains += change;
-    else losses += Math.abs(change);
+  for (let i = 1; i < midpoints.length; i++) {
+    if (midpoints[i] > midpoints[i - 1]) up++;
+    if (midpoints[i] < midpoints[i - 1]) down++;
   }
 
-  if (losses === 0) return 100;
-  if (gains === 0) return 0;
-
-  const rs = gains / losses;
-  return 100 - 100 / (1 + rs);
-}
-
-function getSaudiTime() {
-  return new Intl.DateTimeFormat("ar-SA", {
-    timeZone: "Asia/Riyadh",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  }).format(new Date());
-}
-
-async function analyzeMarket() {
-  const response = await axios.get(
-    "https://api.twelvedata.com/time_series",
-    {
-      params: {
-        symbol: "EUR/USD",
-        interval: "1min",
-        outputsize: 60,
-        apikey: process.env.TWELVEDATA_API_KEY
-      },
-      timeout: 15000
-    }
-  );
-
-  if (!response.data.values) {
-    throw new Error(
-      response.data.message || "لم تصل بيانات السوق"
-    );
-  }
-
-  const candles = response.data.values;
-  const prices = candles
-    .map(item => Number(item.close))
-    .reverse();
-
-  if (prices.length < 22) {
-    throw new Error("البيانات غير كافية للتحليل");
-  }
-
-  const latestCandle = candles[0];
-  const price = prices[prices.length - 1];
-
-  const ema9 = calculateEMA(prices, 9);
-  const ema21 = calculateEMA(prices, 21);
-  const rsi = calculateRSI(prices, 14);
+  const last = candles[4];
+  const range = last.high - last.low;
 
   let signal = "⏳ انتظار";
-  let duration = "لا توجد مدة مقترحة";
+  let direction = "غير واضح";
+  let duration = "لا توجد مدة مناسبة";
 
-  if (
-    ema9 > ema21 &&
-    price > ema9 &&
-    rsi >= 52 &&
-    rsi <= 68
-  ) {
+  if (up === 4) {
     signal = "🟢 شراء UP";
-    duration = "دقيقة واحدة";
-  } else if (
-    ema9 < ema21 &&
-    price < ema9 &&
-    rsi >= 32 &&
-    rsi <= 48
-  ) {
+    direction = "صاعد";
+    duration = "30 ثانية";
+  } else if (down === 4) {
     signal = "🔴 بيع DOWN";
-    duration = "دقيقتان";
+    direction = "هابط";
+    duration = "30 ثانية";
   }
 
   return {
-    price,
-    ema9,
-    ema21,
-    rsi,
     signal,
+    direction,
     duration,
-    candleTime: latestCandle.datetime
+    lastHigh: last.high,
+    lastLow: last.low,
+    range,
+    midpoints
   };
 }
 
-async function sendAnalysis(bot, chatId) {
-  const d = await analyzeMarket();
-
-  const message =
-    "📊 تحليل اليورو دولار - Masaad\n\n" +
-    "⏱ فريم دقيقة واحدة\n" +
-    "🕒 وقت الإرسال: " + getSaudiTime() + "\n" +
-    "🕯 وقت الشمعة: " + d.candleTime + "\n\n" +
-    "السعر: " + d.price.toFixed(5) + "\n" +
-    "EMA 9: " + d.ema9.toFixed(5) + "\n" +
-    "EMA 21: " + d.ema21.toFixed(5) + "\n" +
-    "RSI: " + d.rsi.toFixed(2) + "\n\n" +
-    "الإشارة: " + d.signal + "\n" +
-    "المدة المقترحة: " + d.duration + "\n\n" +
-    "⚠️ الإشارات تحليلية وليست ضماناً للربح.";
-
-  await bot.api.sendMessage(chatId, message);
-}
-
 export function registerCommands(bot) {
-  const subscribers = new Set();
-
   bot.command("start", async ctx => {
-    subscribers.add(ctx.chat.id);
-
     await ctx.reply(
-      "أهلاً بك في Masaad 🤖\n" +
-      "تم تفعيل التحليل التلقائي كل دقيقة.\n\n" +
-      "استخدم /help لمعرفة الأوامر."
+      "أهلاً بك في Masaad 🤖\n\n" +
+      "📊 تحليل Smart\n\n" +
+      "/smart - بدء تحليل 5 شمعات\n" +
+      "/cancel - إلغاء التحليل\n" +
+      "/help - المساعدة"
     );
   });
 
   bot.command("help", async ctx => {
     await ctx.reply(
       "📌 أوامر Masaad\n\n" +
-      "/start - تشغيل التحليل التلقائي\n" +
-      "/eurusd - تحليل اليورو دولار الآن\n" +
-      "/gold - تحليل الآن\n" +
-      "/stop - إيقاف التحليل التلقائي"
+      "/smart - تحليل آخر 5 شمعات Smart\n" +
+      "/cancel - إلغاء التحليل\n\n" +
+      "لكل شمعة أرسل:\n" +
+      "1- القمة أولاً\n" +
+      "2- القاع بعدها\n\n" +
+      "كرر ذلك لخمس شمعات، من الأقدم للأحدث."
     );
   });
 
-  bot.command("eurusd", async ctx => {
-    try {
-      await sendAnalysis(bot, ctx.chat.id);
-    } catch (error) {
-      await ctx.reply("تعذر التحليل: " + error.message);
-    }
+  bot.command("smart", async ctx => {
+    const key = `${ctx.chat.id}:${ctx.from.id}`;
+
+    sessions.set(key, {
+      candles: [],
+      pendingHigh: null
+    });
+
+    await ctx.reply(
+      "📊 بدأ تحليل Smart\n\n" +
+      "سنحلل 5 شمعات دقيقة.\n\n" +
+      "أرسل الآن قمة الشمعة الأولى.\n" +
+      "بعدها سأطلب منك القاع.\n\n" +
+      "📈 الشموع: 0 من 5"
+    );
   });
 
-  bot.command("gold", async ctx => {
-    try {
-      await sendAnalysis(bot, ctx.chat.id);
-    } catch (error) {
-      await ctx.reply("تعذر التحليل: " + error.message);
-    }
+  bot.command("cancel", async ctx => {
+    const key = `${ctx.chat.id}:${ctx.from.id}`;
+    sessions.delete(key);
+    await ctx.reply("تم إلغاء التحليل.");
   });
 
-  bot.command("stop", async ctx => {
-    subscribers.delete(ctx.chat.id);
-    await ctx.reply("تم إيقاف التحليل التلقائي.");
-  });
+  bot.on("message:text", async ctx => {
+    const key = `${ctx.chat.id}:${ctx.from.id}`;
+    const session = sessions.get(key);
 
-  async function sendToAllSubscribers() {
-    for (const chatId of subscribers) {
-      try {
-        await sendAnalysis(bot, chatId);
-      } catch (error) {
-        console.error("Analysis error:", error.message);
-      }
+    if (!session) return;
+
+    const text = ctx.message.text.trim();
+
+    if (text.startsWith("/")) return;
+
+    const price = parsePrice(text);
+
+    if (price === null) {
+      await ctx.reply(
+        "⚠️ أرسل السعر فقط بالأرقام.\n" +
+        "مثال: 264.273"
+      );
+      return;
     }
-  }
 
-  function scheduleNextMinute() {
-    const now = Date.now();
-    const delay = 60000 - (now % 60000);
+    // استقبال القمة
+    if (session.pendingHigh === null) {
+      session.pendingHigh = price;
 
-    setTimeout(async () => {
-      await sendToAllSubscribers();
+      await ctx.reply(
+        `✅ تم تسجيل القمة: ${price}\n\n` +
+        `أرسل الآن قاع الشمعة رقم ${session.candles.length + 1}.`
+      );
 
-      setInterval(() => {
-        sendToAllSubscribers();
-      }, 60000);
-    }, delay);
-  }
+      return;
+    }
 
-  scheduleNextMinute();
+    // استقبال القاع
+    const high = session.pendingHigh;
+    const low = price;
+
+    if (low > high) {
+      session.pendingHigh = null;
+
+      await ctx.reply(
+        "⚠️ القاع لا يمكن أن يكون أعلى من القمة.\n" +
+        "أعد إرسال قمة الشمعة ثم قاعها."
+      );
+
+      return;
+    }
+
+    session.candles.push({ high, low });
+    session.pendingHigh = null;
+
+    const count = session.candles.length;
+
+    if (count < REQUIRED_CANDLES) {
+      await ctx.reply(
+        `✅ تم تسجيل الشمعة ${count} من 5\n` +
+        `القمة: ${high}\n` +
+        `القاع: ${low}\n\n` +
+        `أرسل قمة الشمعة رقم ${count + 1}.`
+      );
+
+      return;
+    }
+
+    const result = analyzeSmart(session.candles);
+
+    sessions.delete(key);
+
+    let details = "";
+
+    session.candles.forEach((candle, index) => {
+      details +=
+        `الشمعة ${index + 1}: ` +
+        `القمة ${candle.high} | القاع ${candle.low}\n`;
+    });
+
+    await ctx.reply(
+      "📊 نتيجة تحليل Smart - Masaad\n\n" +
+      "✅ اكتمل تحليل 5 شمعات\n\n" +
+      details + "\n" +
+      "📍 الاتجاه: " + result.direction + "\n" +
+      "🎯 الإشارة: " + result.signal + "\n" +
+      "⏱ المدة المقترحة: " + result.duration + "\n\n" +
+      "آخر قمة: " + result.lastHigh + "\n" +
+      "آخر قاع: " + result.lastLow + "\n" +
+      "نطاق آخر شمعة: " + result.range.toFixed(5) + "\n\n" +
+      "⚠️ هذا تحليل تقديري لنطاقات الشموع، " +
+      "وليس إشارة مؤكدة أو ضماناً للربح.\n\n" +
+      "لبدء تحليل جديد أرسل /smart"
+    );
+  });
 }
-
