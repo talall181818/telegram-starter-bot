@@ -115,7 +115,7 @@ function analyzeSmart(prices) {
   );
 }
 
-function registerCommands(bot) {
+export function registerCommands(bot) {
   bot.command("start", async ctx => {
     await ctx.reply(
       "أهلاً بك في Masaad 🤖\n\n" +
@@ -153,8 +153,7 @@ function registerCommands(bot) {
     await ctx.reply("⏳ جاري تحليل اليورو دولار...");
 
     try {
-      const result = await getEURUSDAnalysis();
-      await ctx.reply(result);
+      await ctx.reply(await getEURUSDAnalysis());
     } catch (error) {
       console.error(error);
       await ctx.reply("❌ تعذر التحليل: " + error.message);
@@ -162,9 +161,7 @@ function registerCommands(bot) {
   });
 
   bot.on("message:text", async ctx => {
-    const chatId = ctx.chat.id;
-    const prices = smartPrices.get(chatId);
-
+    const prices = smartPrices.get(ctx.chat.id);
     if (!prices) return;
 
     const value = Number(ctx.message.text.trim());
@@ -181,10 +178,8 @@ function registerCommands(bot) {
       return;
     }
 
-    smartPrices.delete(chatId);
+    smartPrices.delete(ctx.chat.id);
     await ctx.reply(analyzeSmart(prices));
   });
 }
-
-module.exports = { registerCommands };
 
