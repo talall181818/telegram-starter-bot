@@ -13,73 +13,72 @@ function normalizeNumber(text) {
   return Number.isFinite(value) ? value : null;
 }
 
-function getToken(bot) {
-  return (
-    bot.token ||
-    process.env.TELEGRAM_BOT_TOKEN ||
-    process.env.BOT_TOKEN ||
-    process.env.TELEGRAM_TOKEN ||
-    process.env.TOKEN
-  );
-}
-
 function buildManualAnalysis(values) {
   const [high, low, open, current, later] = values;
 
-  const range = high - low;
+  const range = Math.max(high - low, 0.0000001);
   const movement = later - current;
   const candleMove = current - open;
 
-  let direction = "شراء UP";
-  let reason = "الأسعار تميل للصعود";
+  let direction;
+  let reason;
   let confidence = "ضعيف";
 
-  if (movement > 0 && candleMove > 0) {
+  if (movement > 0 && candleMove >= 0) {
     direction = "شراء UP";
-    reason = "السعر أعلى من الافتتاح ويتحرك صعودًا";
+    reason = "السعر يتحرك صعودًا والشمعة فوق الافتتاح";
     confidence = "متوسط";
-  } else if (movement < 0 && candleMove < 0) {
+  } else if (movement < 0 && candleMove <= 0) {
     direction = "بيع DOWN";
-    reason = "السعر أقل من الافتتاح ويتحرك هبوطًا";
+    reason = "السعر يتحرك هبوطًا والشمعة تحت الافتتاح";
     confidence = "متوسط";
   } else if (movement > 0) {
     direction = "شراء UP";
-    reason = "الحركة الأخيرة صاعدة رغم اختلاف حركة الشمعة";
+    reason = "الحركة الأخيرة صاعدة، لكن الشمعة لا تؤكدها بالكامل";
   } else if (movement < 0) {
     direction = "بيع DOWN";
-    reason = "الحركة الأخيرة هابطة رغم اختلاف حركة الشمعة";
+    reason = "الحركة الأخيرة هابطة، لكن الشمعة لا تؤكدها بالكامل";
+  } else if (candleMove >= 0) {
+    direction = "شراء UP";
+    reason = "لا توجد حركة أخيرة واضحة؛ الترجيح حسب موقع السعر من الافتتاح";
   } else {
-    direction = candleMove >= 0 ? "شراء UP" : "بيع DOWN";
-    reason = "الحركة غير واضحة، وهذا مجرد ترجيح";
+    direction = "بيع DOWN";
+    reason = "لا توجد حركة أخيرة واضحة؛ الترجيح حسب موقع السعر من الافتتاح";
   }
 
-  if (range > 0 && Math.abs(movement) > range * 0.08) {
-    confidence = "متوسط";
+  const strength = Math.abs(movement);
+
+  let duration = "50 ثانية";
+  if (strength >= range * 0.25) {
+    duration = "دقيقتان";
+  } else if (strength >= range * 0.10) {
+    duration = "دقيقة واحدة";
   }
 
-  let duration = 30;
-  if (Math.abs(movement) > range * 0.15) duration = 45;
-  if (Math.abs(movement) > range * 0.3) duration = 60;
+  const confirmed =
+    (direction === "شراء UP" && movement > 0 && candleMove > 0) ||
+    (direction === "بيع DOWN" && movement < 0 && candleMove < 0);
+
+  if (confirmed) confidence = "متوسط";
 
   return (
     "📊 تحليل Smart - Masaad\n\n" +
-    "⏱️ الفريم: 5 دقائق\n" +
     `🔺 أعلى الشمعة السابقة: ${high}\n` +
     `🔻 أدنى الشمعة السابقة: ${low}\n` +
-    `افتتاح الشمعة: ${open}\n` +
+    `افتتاح الشمعة الجديدة: ${open}\n` +
     `السعر الحالي: ${current}\n` +
     `السعر بعد 10 ثوانٍ: ${later}\n\n` +
-    `🎯 أفضل ترجيح: ${direction}\n` +
-    `📈 قوة الترجيح: ${confidence}\n` +
-    `🧭 السبب: ${reason}\n` +
-    `⏳ المدة التجريبية: ${duration} ثانية\n\n` +
-    "⚠️ هذا ترجيح آلي مبسط وليس إشارة مؤكدة. لا تدخل إذا كانت الحركة متذبذبة."
+    `🎯 الاتجاه الأقرب: ${direction}\n` +
+    `📊 قوة الترجيح: ${confidence}\n` +
+    `⏱️ المدة المختارة: ${duration}\n` +
+    `🧭 السبب: ${reason}\n\n` +
+    `🚦 حالة الدخول: ${confirmed ? "الترجيح متوافق مع الحركة، لكنه غير مضمون" : "ترجيح مبدئي، انتظر تأكيد الحركة"}\n\n` +
+    "⚠️ هذا تحليل مبسط للأسعار المدخلة وليس إشارة مضمونة."
   );
 }
 
 async function analyzeChartImage(ctx) {
   const apiKey = process.env.GEMINI_API_KEY;
-  const token = getToken(ctx.me ? ctx.api : ctx.bot);
 
   if (!apiKey) {
     await ctx.reply("⚠️ مفتاح GEMINI_API_KEY غير موجود في إعدادات الاستضافة.");
@@ -95,7 +94,7 @@ async function analyzeChartImage(ctx) {
     const file = await ctx.api.getFile(photo.file_id);
 
     if (!file.file_path) {
-      throw new Error("تعذر الحصول على مسار الصورة من تيليجرام.");
+      throw new Error("تعذر الحصول على مسار الصورة.");
     }
 
     const botToken = ctx.api.token;
@@ -123,25 +122,30 @@ async function analyzeChartImage(ctx) {
 
     const prompt = `
 أنت مساعد تحليل فني بصري لشارت ExpertOption Smart.
-حلل الصورة المرفقة فقط. لا تدّع أنك ترى الأسعار الحية أو تعرف ما سيحدث مستقبلًا.
+حلل الصورة فقط ولا تدّع أنك ترى الأسعار الحية.
 
-المطلوب:
-1. صف اتجاه الشموع الأخيرة: صاعد أو هابط أو متذبذب.
-2. حدد لون آخر شمعة مكتملة إن كان واضحًا.
-3. اقرأ السعر وأقرب قمة وقاع ومستويات المقاومة والدعم الظاهرة فقط.
-4. هل يوجد اختراق أو كسر واضح؟ لا تخترع مستويات غير مقروءة.
-5. أعطني أفضل ترجيح اتجاهي الآن، ولا تجعل الإجابة كلها انتظارًا:
-   - شراء UP إذا كانت دلائل الصعود أقوى.
-   - بيع DOWN إذا كانت دلائل الهبوط أقوى.
-   - إذا كانت الصورة غير واضحة جدًا، قل إن الترجيح غير موثوق واختر الاتجاه الأقرب فقط إذا أمكن.
-6. اكتب درجة الترجيح: ضعيف أو متوسط أو قوي.
-7. اكتب أقرب فرصة شراء محتملة وشرط تحققها.
-8. اكتب أقرب فرصة بيع محتملة وشرط تحققها.
-9. اختر الأقرب بين فرصتي الشراء والبيع.
-10. اقترح مدة تجريبية واحدة: 30 أو 45 أو 60 ثانية، واذكر سبب الاختيار.
-11. اذكر متى تلغى الفكرة أو يصبح الدخول غير مناسب.
+المطلوب الأساسي:
+لا تترك الاتجاه أو المدة بدون تحديد.
+اختر دائمًا أفضل ترجيح اتجاهي واحد:
+شراء UP أو بيع DOWN.
+حتى لو كان الترجيح ضعيفًا، اختر الاتجاه الأقرب واشرح أنه غير مؤكد.
+لا تجعل كلمة انتظار هي النتيجة الوحيدة.
 
-اكتب بالعربية وبشكل واضح بهذا التنسيق:
+اختر مدة واحدة فقط من هذه المدد:
+50 ثانية أو دقيقة واحدة أو دقيقتان.
+
+حلل:
+1. اتجاه الشموع الأخيرة.
+2. لون آخر شمعة مكتملة.
+3. السعر الظاهر، إذا كان مقروءًا.
+4. أقرب مقاومة ودعم، إذا كانا واضحين.
+5. هل توجد شمعة انعكاسية أو اختراق أو كسر؟
+6. هل ضغط الشراء أقوى أم ضغط البيع؟
+7. ما الاتجاه الأقرب الآن؟
+8. ما شرط تأكيد الدخول؟
+9. ما الذي يلغي هذا الترجيح؟
+
+أخرج النتيجة بهذا التنسيق حرفيًا:
 
 📊 تحليل Smart - Masaad
 
@@ -151,25 +155,30 @@ async function analyzeChartImage(ctx) {
 🔺 المقاومة:
 🔻 الدعم:
 
-🎯 أفضل ترجيح الآن: شراء UP أو بيع DOWN
-📊 قوة الترجيح: ضعيف / متوسط / قوي
-⏳ المدة التجريبية: 30 أو 45 أو 60 ثانية
+🎯 الاتجاه الأقرب الآن: شراء UP أو بيع DOWN
+📊 قوة الترجيح: ضعيف أو متوسط أو قوي
+⏱️ المدة المختارة: 50 ثانية أو دقيقة واحدة أو دقيقتان
 
-🟢 فرصة الشراء:
-🔴 فرصة البيع:
-⭐ الفرصة الأقرب:
-⚠️ شرط إلغاء الترجيح:
+🚦 حالة الدخول:
+اكتب هل الترجيح مبدئي أم توجد علامة تأكيد واضحة.
 
-مهم:
-- أعطني ترجيحًا اتجاهيًا بدل تكرار كلمة انتظار.
-- لا تصف الترجيح بأنه مؤكد إذا لم يوجد تأكيد.
-- لا تخترع أسعارًا أو أرقامًا غير ظاهرة.
-- إذا كانت الصورة لا تسمح بقراءة السعر، اكتب "غير واضح".
-- لا تضمن الربح ولا تقدم مدة على أنها مضمونة.
+🟢 شرط الشراء:
+🔴 شرط البيع:
+⭐ سبب اختيار الاتجاه:
+❌ متى تلغى الإشارة؟
+
+قواعد مهمة:
+- لا تكتب "انتظار" وحدها. حدد الاتجاه الأقرب أولًا.
+- لا تقل إن الإشارة مؤكدة إذا لم يظهر تأكيد واضح.
+- لا تخترع أسعارًا أو مستويات غير ظاهرة.
+- إذا تعذر قراءة السعر فاكتب "غير واضح".
+- لا تضمن الربح.
+- اختر مدة واحدة فقط ولا تتركها فارغة.
+- لا تعتبر مجرد لمس مستوى سعري اختراقًا مؤكدًا.
 `;
 
     const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
       {
         method: "POST",
         headers: {
@@ -192,7 +201,7 @@ async function analyzeChartImage(ctx) {
           ],
           generationConfig: {
             temperature: 0.2,
-            maxOutputTokens: 1200
+            maxOutputTokens: 1400
           }
         })
       }
@@ -203,18 +212,17 @@ async function analyzeChartImage(ctx) {
     if (!response.ok) {
       console.error("Gemini API error:", result);
       throw new Error(
-        result.error?.message || "حدث خطأ أثناء الاتصال بخدمة التحليل."
+        result.error?.message || "تعذر الاتصال بخدمة التحليل."
       );
     }
 
-    const answer =
-      result.candidates?.[0]?.content?.parts
-        ?.map(part => part.text || "")
-        .join("\n")
-        .trim();
+    const answer = result.candidates?.[0]?.content?.parts
+      ?.map(part => part.text || "")
+      .join("\n")
+      .trim();
 
     if (!answer) {
-      throw new Error("لم يرجع التحليل نتيجة. حاول بصورة أوضح.");
+      throw new Error("لم تصل نتيجة التحليل.");
     }
 
     await ctx.reply(answer);
@@ -222,8 +230,8 @@ async function analyzeChartImage(ctx) {
   } catch (error) {
     console.error("Image analysis error:", error);
     await ctx.reply(
-      "⚠️ تعذر تحليل الصورة هذه المرة.\n" +
-      "تأكد أن الصورة واضحة وأن مفتاح Gemini مضبوط في الاستضافة."
+      "⚠️ تعذر تحليل الصورة.\n" +
+      "حاول إرسال صورة أوضح، وتأكد من إعداد مفتاح Gemini."
     );
   }
 }
@@ -235,8 +243,8 @@ export function registerCommands(bot) {
     await ctx.reply(
       "أهلاً بك في Masaad 🤖\n\n" +
       "📊 تحليل شارت Smart\n\n" +
-      "📷 أرسل صورة الشارت لتحليلها.\n" +
-      "/smart - تحليل الأسعار يدويًا\n" +
+      "📷 أرسل صورة الشارت للتحليل.\n" +
+      "/smart - إدخال الأسعار يدويًا\n" +
       "/help - المساعدة\n" +
       "/cancel - إلغاء الإدخال"
     );
@@ -244,9 +252,9 @@ export function registerCommands(bot) {
 
   bot.command("help", async ctx => {
     await ctx.reply(
-      "📖 قائمة أوامر Masaad\n\n" +
-      "📷 أرسل صورة شارت Smart لتحليلها.\n\n" +
-      "/smart - إدخال خمسة أسعار للتحليل\n" +
+      "📖 أوامر Masaad\n\n" +
+      "📷 أرسل صورة شارت Smart للتحليل.\n" +
+      "/smart - إدخال خمسة أسعار\n" +
       "/cancel - إلغاء الإدخال\n" +
       "/start - القائمة الرئيسية"
     );
@@ -283,7 +291,7 @@ export function registerCommands(bot) {
     const value = normalizeNumber(ctx.message.text);
 
     if (value === null) {
-      await ctx.reply("⚠️ أرسل رقم السعر فقط، مثال: 264.2505");
+      await ctx.reply("⚠️ أرسل السعر كرقم فقط، مثال: 264.2505");
       return;
     }
 
@@ -308,4 +316,3 @@ export function registerCommands(bot) {
     await ctx.reply(result);
   });
 }
-
