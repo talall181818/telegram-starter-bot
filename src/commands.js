@@ -1,5 +1,8 @@
 
 const sessions = new Map();
+const autoJobs = new Map();
+
+// ---------------- GENERAL ----------------
 
 function parsePrice(text) {
   const normalized = text.trim()
@@ -11,6 +14,13 @@ function parsePrice(text) {
 
   const value = Number(normalized);
   return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function getSaudiTime() {
+  return new Date().toLocaleString("en-GB", {
+    timeZone: "Asia/Riyadh",
+    hour12: false
+  });
 }
 
 // ---------------- SMART ----------------
@@ -44,7 +54,8 @@ function calculateEMA(values, period) {
   let ema = values[0];
 
   for (let i = 1; i < values.length; i++) {
-    ema = (values[i] * multiplier) + (ema * (1 - multiplier));
+    ema = values[i] * multiplier +
+      ema * (1 - multiplier);
   }
 
   return ema;
@@ -56,7 +67,11 @@ function calculateRSI(values, endIndex, period = 14) {
   let gains = 0;
   let losses = 0;
 
-  for (let i = endIndex - period + 1; i <= endIndex; i++) {
+  for (
+    let i = endIndex - period + 1;
+    i <= endIndex;
+    i++
+  ) {
     const change = values[i] - values[i - 1];
 
     if (change > 0) gains += change;
@@ -66,7 +81,7 @@ function calculateRSI(values, endIndex, period = 14) {
   const averageGain = gains / period;
   const averageLoss = losses / period;
 
-  if (averageLoss === 0 && averageGain === 0) return 50;
+  if (averageGain === 0 && averageLoss === 0) return 50;
   if (averageLoss === 0) return 100;
 
   const rs = averageGain / averageLoss;
@@ -77,7 +92,7 @@ async function analyzeEURUSD() {
   const apiKey = process.env.TWELVEDATA_API_KEY;
 
   if (!apiKey) {
-    throw new Error("مفتاح Twelve Data غير موجود في إعدادات الاستضافة.");
+    throw new Error("مفتاح Twelve Data غير موجود في FadeHost.");
   }
 
   const url =
@@ -91,98 +106,121 @@ async function analyzeEURUSD() {
   const data = await response.json();
 
   if (!response.ok || data.status === "error" || !data.values) {
-    throw new Error(data.message || "تعذر جلب بيانات EUR/USD.");
+    throw new Error(data.message || "تعذر سحب بيانات اليورو.");
   }
 
-  // ترتيب الشموع من الأقدم إلى الأحدث
   const allCandles = data.values
     .slice()
     .sort((a, b) => a.datetime.localeCompare(b.datetime));
 
-  // استبعاد أحدث شمعة حتى لا نعتمد على شمعة قد تكون غير مكتملة
+  // نستبعد أحدث شمعة لاحتمال أنها لم تكتمل
   const candles = allCandles.slice(0, -1);
 
   if (candles.length < 25) {
-    throw new Error("البيانات غير كافية للتحليل حالياً.");
+    throw new Error("البيانات غير كافية للتحليل.");
   }
 
   const closes = candles.map(c => Number(c.close));
+
+  if (closes.some(v => !Number.isFinite(v))) {
+    throw new Error("بيانات الأسعار غير صحيحة.");
+  }
+
   const last = candles[candles.length - 1];
   const previous = candles[candles.length - 2];
 
   const ema9 = calculateEMA(closes.slice(-30), 9);
   const ema21 = calculateEMA(closes.slice(-30), 21);
 
+  const previousCloses = closes.slice(0, -1);
+  const previousEMA9 = calculateEMA(previousCloses.slice(-30), 9);
+  const previousEMA21 = calculateEMA(previousCloses.slice(-30), 21);
+
   const rsi = calculateRSI(closes, closes.length - 1);
   const previousRSI = calculateRSI(closes, closes.length - 2);
 
-  const close = Number(last.close);
+  const price = Number(last.close);
   const open = Number(last.open);
 
-  const bullishTrend = ema9 > ema21;
-  const bearishTrend = ema9 < ema21;
+  const emaGap = Math.abs(ema9 - ema21);
+  const minimumGap = 0.00002;
+
+  const bullishTrend = ema9 > ema21 && emaGap > minimumGap;
+  const bearishTrend = ema9 < ema21 && emaGap > minimumGap;
 
   const rsiRising = rsi > previousRSI;
   const rsiFalling = rsi < previousRSI;
 
-  const bullishCandle = close > open && close > ema9;
-  const bearishCandle = close < open && close < ema9;
+  const emaGapGrowing =
+    Math.abs(ema9 - ema21) >
+    Math.abs(previousEMA9 - previousEMA21);
+
+  const bullishCandle = price > open && price > ema9;
+  const bearishCandle = price < open && price < ema9;
 
   let signal = "⏸ انتظار";
   let reason = "شروط الدخول غير مكتملة";
   let strength = "غير كافية";
   let direction = "متذبذب";
+  let momentum = "مستقر";
+
+  if (rsiRising) momentum = "يتحسن";
+  if (rsiFalling) momentum = "يضعف";
 
   if (bullishTrend) direction = "صاعد";
   if (bearishTrend) direction = "هابط";
 
-  // شروط الشراء
+  // شراء
   if (
     bullishTrend &&
     rsi >= 52 &&
     rsi < 68 &&
     rsiRising &&
+    emaGapGrowing &&
     bullishCandle
   ) {
     signal = "🟢 شراء UP";
-    reason = "المتوسطات والزخم والشمعة تؤكد الصعود";
+    reason = "الاتجاه والزخم والشمعة تؤكد الصعود";
     strength = "متوسطة";
   }
 
-  // شروط البيع
+  // بيع
   else if (
     bearishTrend &&
     rsi <= 48 &&
     rsi > 32 &&
     rsiFalling &&
+    emaGapGrowing &&
     bearishCandle
   ) {
     signal = "🔴 بيع DOWN";
-    reason = "المتوسطات والزخم والشمعة تؤكد الهبوط";
+    reason = "الاتجاه والزخم والشمعة تؤكد الهبوط";
     strength = "متوسطة";
   }
 
-  // توضيح سبب الانتظار
-  else if (rsi >= 68) {
-    reason = "الزخم مرتفع؛ ننتظر تأكيداً قبل الشراء";
+  // أسباب الانتظار
+  else if (emaGap <= minimumGap) {
+    reason = "المتوسطات متقاربة والسوق متذبذب";
+  } else if (rsi >= 68) {
+    reason = "الزخم مرتفع وننتظر تأكيداً جديداً";
   } else if (rsi <= 32) {
-    reason = "الزخم منخفض جداً؛ ننتظر تأكيداً قبل البيع";
-  } else if (!bullishTrend && !bearishTrend) {
-    reason = "المتوسطات متساوية تقريباً والسوق متذبذب";
+    reason = "الزخم منخفض وننتظر تأكيداً جديداً";
   } else if (bullishTrend && !rsiRising) {
-    reason = "الاتجاه صاعد لكن الزخم لا يتقوى";
+    reason = "الاتجاه صاعد لكن الزخم لا يتحسن";
   } else if (bearishTrend && !rsiFalling) {
-    reason = "الاتجاه هابط لكن ضغط البيع لا يتقوى";
+    reason = "الاتجاه هابط لكن الزخم لا يتقوى";
+  } else if (!emaGapGrowing) {
+    reason = "قوة الاتجاه لا تتوسع بعد";
   } else if (bullishTrend && !bullishCandle) {
     reason = "ننتظر شمعة صاعدة تؤكد الاتجاه";
   } else if (bearishTrend && !bearishCandle) {
     reason = "ننتظر شمعة هابطة تؤكد الاتجاه";
   } else {
-    reason = "ننتظر توافق المؤشرات قبل الدخول";
+    reason = "ننتظر توافق المؤشرات";
   }
 
   return {
-    price: close,
+    price,
     ema9,
     ema21,
     rsi,
@@ -191,9 +229,85 @@ async function analyzeEURUSD() {
     signal,
     reason,
     strength,
+    momentum,
     candleTime: last.datetime
   };
 }
+
+// ---------------- EUR/USD REPORT ----------------
+
+function makeEURUSDReport(result) {
+  return (
+    "📊 تحليل EUR/USD - Masaad\n\n" +
+    "💰 السعر: " + result.price.toFixed(5) + "\n" +
+    "📈 الاتجاه: " + result.direction + "\n" +
+    "EMA 9: " + result.ema9.toFixed(5) + "\n" +
+    "EMA 21: " + result.ema21.toFixed(5) + "\n" +
+    "RSI الحالي: " + result.rsi.toFixed(2) + "\n" +
+    "RSI السابق: " + result.previousRSI.toFixed(2) + "\n\n" +
+    "📊 الزخم: " + result.momentum + "\n" +
+    "🎯 القرار: " + result.signal + "\n" +
+    "💪 قوة الترجيح: " + result.strength + "\n" +
+    "📝 السبب: " + result.reason + "\n\n" +
+    "⏱ الفريم: دقيقة واحدة\n" +
+    "🕯 الشمعة: مكتملة حسب آخر بيانات المصدر\n" +
+    "🕒 وقت الشمعة: " + result.candleTime + "\n" +
+    "🕒 وقت الفحص: " + getSaudiTime() + "\n\n" +
+    "🔄 الفحص القادم بعد 60 ثانية.\n" +
+    "لإيقاف الفحص أرسل /stop\n\n" +
+    "⚠️ تحليل احتمالي وليس ضماناً للربح."
+  );
+}
+
+// ---------------- AUTOMATIC ANALYSIS ----------------
+
+function stopAuto(key) {
+  const job = autoJobs.get(key);
+
+  if (job && job.timer) {
+    clearInterval(job.timer);
+  }
+
+  autoJobs.delete(key);
+}
+
+async function runAutoAnalysis(bot, chatId, key) {
+  const job = autoJobs.get(key);
+
+  if (!job || job.running) return;
+
+  job.running = true;
+
+  try {
+    const result = await analyzeEURUSD();
+
+    await bot.api.sendMessage(
+      chatId,
+      makeEURUSDReport(result)
+    );
+
+  } catch (error) {
+    console.error("EURUSD error:", error);
+
+    await bot.api.sendMessage(
+      chatId,
+      "⚠️ تعذر تحليل EUR/USD.\n" +
+      error.message +
+      "\n\nتم إيقاف الفحص التلقائي. أرسل /eurusd للمحاولة مجدداً."
+    );
+
+    stopAuto(key);
+
+  } finally {
+    const currentJob = autoJobs.get(key);
+
+    if (currentJob) {
+      currentJob.running = false;
+    }
+  }
+}
+
+// ---------------- BOT COMMANDS ----------------
 
 export function registerCommands(bot) {
 
@@ -202,7 +316,8 @@ export function registerCommands(bot) {
       "أهلاً بك في Masaad 🤖\n\n" +
       "📊 الأسواق المتاحة:\n\n" +
       "/smart - تحليل Smart اليدوي\n" +
-      "/eurusd - تحليل اليورو دولار تلقائياً\n" +
+      "/eurusd - تحليل اليورو التلقائي كل دقيقة\n" +
+      "/stop - إيقاف تحليل اليورو\n" +
       "/cancel - إلغاء تحليل Smart\n" +
       "/help - المساعدة"
     );
@@ -211,14 +326,15 @@ export function registerCommands(bot) {
   bot.command("help", async ctx => {
     await ctx.reply(
       "📌 أوامر Masaad\n\n" +
-      "/smart - تحليل Smart\n" +
+      "/smart - تحليل Smart اليدوي\n" +
       "أدخل قمة الشمعة ثم قاعها ثم افتتاح الشمعة الثانية.\n\n" +
-      "/eurusd - سحب بيانات اليورو وتحليلها تلقائياً.\n\n" +
+      "/eurusd - يبدأ تحليل اليورو فوراً ويكرر الفحص كل 60 ثانية.\n\n" +
+      "/stop - إيقاف تحليل اليورو التلقائي.\n" +
       "/cancel - إلغاء تحليل Smart."
     );
   });
 
-  // ---------------- SMART COMMAND ----------------
+  // ---------------- SMART ----------------
 
   bot.command("smart", async ctx => {
     const key = `${ctx.chat.id}:${ctx.from.id}`;
@@ -238,43 +354,61 @@ export function registerCommands(bot) {
   bot.command("cancel", async ctx => {
     const key = `${ctx.chat.id}:${ctx.from.id}`;
     sessions.delete(key);
+
     await ctx.reply("تم إلغاء تحليل Smart.");
   });
 
-  // ---------------- EURUSD COMMAND ----------------
+  // ---------------- EURUSD AUTO START ----------------
 
   bot.command("eurusd", async ctx => {
-    await ctx.reply("⏳ جارٍ سحب بيانات EUR/USD وتحليل المؤشرات...");
+    const key = `${ctx.chat.id}:${ctx.from.id}`;
+    const chatId = ctx.chat.id;
 
-    try {
-      const result = await analyzeEURUSD();
-
+    if (autoJobs.has(key)) {
       await ctx.reply(
-        "📊 تحليل EUR/USD - Masaad\n\n" +
-        "💰 السعر: " + result.price.toFixed(5) + "\n" +
-        "📈 الاتجاه: " + result.direction + "\n" +
-        "EMA 9: " + result.ema9.toFixed(5) + "\n" +
-        "EMA 21: " + result.ema21.toFixed(5) + "\n" +
-        "RSI الحالي: " + result.rsi.toFixed(2) + "\n" +
-        "RSI السابق: " + result.previousRSI.toFixed(2) + "\n\n" +
-        "🎯 القرار: " + result.signal + "\n" +
-        "💪 قوة الترجيح: " + result.strength + "\n" +
-        "📝 السبب: " + result.reason + "\n" +
-        "⏱ الفريم: دقيقة واحدة\n" +
-        "🕯 الشمعة: مكتملة حسب آخر بيانات المصدر\n" +
-        "🕒 وقت الشمعة: " + result.candleTime + "\n\n" +
-        "🔄 للتحليل القادم أرسل /eurusd بعد 60 ثانية.\n\n" +
-        "⚠️ تحليل احتمالي وليس ضماناً للربح."
+        "✅ تحليل EUR/USD التلقائي يعمل بالفعل.\n\n" +
+        "يتم الفحص كل 60 ثانية.\n" +
+        "لإيقافه أرسل /stop"
       );
-
-    } catch (error) {
-      console.error("EURUSD error:", error);
-
-      await ctx.reply(
-        "⚠️ تعذر تحليل EUR/USD.\n" +
-        error.message
-      );
+      return;
     }
+
+    const job = {
+      timer: null,
+      running: false
+    };
+
+    autoJobs.set(key, job);
+
+    await ctx.reply(
+      "🤖 تم تشغيل تحليل EUR/USD التلقائي.\n" +
+      "سيتم إرسال أول تحليل الآن، ثم تحديث جديد كل 60 ثانية.\n\n" +
+      "لإيقافه أرسل /stop"
+    );
+
+    job.timer = setInterval(() => {
+      runAutoAnalysis(bot, chatId, key);
+    }, 60000);
+
+    await runAutoAnalysis(bot, chatId, key);
+  });
+
+  // ---------------- EURUSD AUTO STOP ----------------
+
+  bot.command("stop", async ctx => {
+    const key = `${ctx.chat.id}:${ctx.from.id}`;
+
+    if (!autoJobs.has(key)) {
+      await ctx.reply("لا يوجد تحليل تلقائي يعمل حالياً.");
+      return;
+    }
+
+    stopAuto(key);
+
+    await ctx.reply(
+      "🛑 تم إيقاف تحليل EUR/USD التلقائي.\n" +
+      "لإعادة تشغيله أرسل /eurusd"
+    );
   });
 
   // ---------------- SMART PRICE INPUT ----------------
@@ -286,6 +420,7 @@ export function registerCommands(bot) {
     if (!session) return;
 
     const text = ctx.message.text.trim();
+
     if (text.startsWith("/")) return;
 
     const price = parsePrice(text);
@@ -343,7 +478,7 @@ export function registerCommands(bot) {
         "📍 منتصف النطاق: " + result.midpoint.toFixed(5) + "\n" +
         "📈 القراءة: " + result.direction + "\n\n" +
         "🎯 الإشارة: " + result.signal + "\n\n" +
-        "⚠️ تحليل مبدئي؛ هذه القيم وحدها لا تؤكد اتجاه السوق.\n\n" +
+        "⚠️ تحليل مبدئي فقط؛ هذه القيم وحدها لا تؤكد اتجاه السوق.\n\n" +
         "لبدء تحليل جديد أرسل /smart"
       );
     }
