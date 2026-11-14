@@ -9,36 +9,38 @@ function getPrice(text) {
 
 function analyzePrices(prices) {
   if (prices.length < 5) {
-    return "⚠️ البيانات غير كافية لتحديد اتجاه موثوق.";
+    return "⚠️ نحتاج 5 قراءات على الأقل لتحليل اتجاه مبدئي.";
   }
 
   const first = prices[0];
   const last = prices[prices.length - 1];
   const change = last - first;
 
-  const direction =
-    change > 0 ? "صاعد" :
-    change < 0 ? "هابط" : "متذبذب";
-
+  let direction = "متذبذب";
   let decision = "⏸ انتظار";
 
-  if (change > 0) decision = "📈 شراء UP (ترجيح)";
-  if (change < 0) decision = "📉 بيع DOWN (ترجيح)";
+  if (change > 0) {
+    direction = "صاعد";
+    decision = "📈 ترجيح شراء UP";
+  } else if (change < 0) {
+    direction = "هابط";
+    decision = "📉 ترجيح بيع DOWN";
+  }
 
-  return `📊 تحليل Smart - Masaad
+  return `📊 تحليل ${sessions.market || "Smart"} - Masaad
 
 💰 آخر سعر: ${last}
 📈 الاتجاه: ${direction}
 🎯 القرار: ${decision}
 ⏱️ المدة: غير محددة
-📌 التحليل مبني على القراءات المرسلة فقط.
 
-⚠️ هذه قراءة أولية وليست ضماناً للنتيجة.`;
+⚠️ تحليل أولي وليس إشارة مضمونة.`;
 }
 
-function registerCommands(bot) {
+export function registerCommands(bot) {
   bot.command("start", async (ctx) => {
     sessions.delete(ctx.chat.id);
+
     await ctx.reply(
       "أهلاً بك في Masaad 🤖\n\n" +
       "📊 تحليل Smart و EUR/USD\n\n" +
@@ -52,8 +54,7 @@ function registerCommands(bot) {
     await ctx.reply(
       "📊 Masaad - المساعدة\n\n" +
       "/smart - تحليل Smart\n" +
-      "/eurusd - تحليل EUR/USD\n\n" +
-      "أرسل السعر بعد بدء التحليل."
+      "/eurusd - تحليل EUR/USD"
     );
   });
 
@@ -64,9 +65,7 @@ function registerCommands(bot) {
     });
 
     await ctx.reply(
-      "📊 بدأ تحليل Smart.\n\n" +
-      "أرسل السعر الحالي فقط.\n" +
-      "لن تحتاج إلى 22 قراءة."
+      "📊 بدأ تحليل Smart.\nأرسل السعر الحالي."
     );
   });
 
@@ -77,8 +76,7 @@ function registerCommands(bot) {
     });
 
     await ctx.reply(
-      "📊 بدأ تحليل EUR/USD.\n\n" +
-      "أرسل السعر الحالي."
+      "📊 بدأ تحليل EUR/USD.\nأرسل السعر الحالي."
     );
   });
 
@@ -99,12 +97,10 @@ function registerCommands(bot) {
     session.prices = session.prices.slice(-10);
 
     await ctx.reply(
-      `💰 تم استلام السعر: ${price}\n\n` +
-      `📊 عدد القراءات: ${session.prices.length}\n\n` +
+      `💰 السعر المستلم: ${price}\n\n` +
+      `عدد القراءات: ${session.prices.length}\n\n` +
       analyzePrices(session.prices)
     );
   });
 }
-
-module.exports = { registerCommands };
 
