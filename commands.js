@@ -2,39 +2,93 @@
 const sessions = new Map();
 
 function getPrice(text) {
-  const value = text.trim().replace(/,/g, ".");
-  if (!/^\d+(\.\d+)?$/.test(value)) return null;
-  return Number(value);
+  const normalized = text
+    .trim()
+    .replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d))
+    .replace(/٫/g, ".")
+    .replace(/,/g, ".");
+
+  if (!/^\d+(\.\d+)?$/.test(normalized)) return null;
+  return Number(normalized);
 }
 
-function analyzePrices(prices) {
+function analyzePrices(prices, market) {
   if (prices.length < 5) {
-    return "⚠️ نحتاج 5 قراءات على الأقل لتحليل اتجاه مبدئي.";
+    return `📊 تم استلام ${prices.length} من 5 قراءات.
+أرسل السعر التالي لإكمال التحليل.`;
   }
 
-  const first = prices[0];
-  const last = prices[prices.length - 1];
-  const change = last - first;
+  const changes = [];
+
+  for (let i = 1; i < prices.length; i++) {
+    changes.push(prices[i] - prices[i - 1]);
+  }
+
+  const positive = changes.filter(x => x > 0).length;
+  const negative = changes.filter(x => x < 0).length;
+  const total = changes.reduce((sum, x) => sum + Math.abs(x), 0);
+  const net = prices[prices.length - 1] - prices[0];
+
+  const consistency = total === 0 ? 0 : Math.abs(net) / total;
 
   let direction = "متذبذب";
   let decision = "⏸ انتظار";
+  let strength = "ضعيفة";
+  let duration = "لا توجد مدة";
 
-  if (change > 0) {
+  if (net > 0 && consistency >= 0.5) {
     direction = "صاعد";
-    decision = "📈 ترجيح شراء UP";
-  } else if (change < 0) {
+    decision = "📈 شراء UP";
+  } else if (net < 0 && consistency >= 0.5) {
     direction = "هابط";
-    decision = "📉 ترجيح بيع DOWN";
+    decision = "📉 بيع DOWN";
   }
 
-  return `📊 تحليل ${sessions.market || "Smart"} - Masaad
+  if (consistency >= 0.9) {
+    strength = "قوية";
+    duration = "45 ثانية";
+  } else if (consistency >= 0.75) {
+    strength = "جيدة";
+    duration = "40 ثانية";
+  } else if (consistency >= 0.6) {
+    strength = "متوسطة";
+    duration = "35 ثانية";
+  } else if (consistency >= 0.5) {
+    strength = "محدودة";
+    duration = "30 ثانية";
+  }
 
-💰 آخر سعر: ${last}
+  if (consistency >= 0.9 && changes.length >= 4) {
+    duration = "دقيقتان";
+  }
+
+  if (consistency >= 0.95 && changes.length >= 5) {
+    duration = "3 دقائق";
+  }
+
+  if (consistency >= 0.98 && changes.length >= 6) {
+    duration = "5 دقائق";
+  }
+
+  if (decision.includes("انتظار")) {
+    duration = "لا تدخل حالياً";
+  }
+
+  return `📊 تحليل ${market} - Masaad
+
+💰 السعر الحالي: ${prices[prices.length - 1]}
+
 📈 الاتجاه: ${direction}
-🎯 القرار: ${decision}
-⏱️ المدة: غير محددة
 
-⚠️ تحليل أولي وليس إشارة مضمونة.`;
+🎯 القرار: ${decision}
+
+💪 قوة الإشارة: ${strength}
+
+⏱️ المدة المقترحة: ${duration}
+
+📊 توافق الحركة: ${(consistency * 100).toFixed(1)}%
+
+⚠️ المدة تجريبية مبنية على القراءات، وليست توقعاً مضموناً لمدة حركة السوق.`;
 }
 
 export function registerCommands(bot) {
@@ -54,7 +108,8 @@ export function registerCommands(bot) {
     await ctx.reply(
       "📊 Masaad - المساعدة\n\n" +
       "/smart - تحليل Smart\n" +
-      "/eurusd - تحليل EUR/USD"
+      "/eurusd - تحليل EUR/USD\n\n" +
+      "أرسل الأسعار بالتتابع."
     );
   });
 
@@ -64,9 +119,7 @@ export function registerCommands(bot) {
       prices: []
     });
 
-    await ctx.reply(
-      "📊 بدأ تحليل Smart.\nأرسل السعر الحالي."
-    );
+    await ctx.reply("📊 بدأ تحليل Smart.\nأرسل السعر الحالي.");
   });
 
   bot.command("eurusd", async (ctx) => {
@@ -75,9 +128,7 @@ export function registerCommands(bot) {
       prices: []
     });
 
-    await ctx.reply(
-      "📊 بدأ تحليل EUR/USD.\nأرسل السعر الحالي."
-    );
+    await ctx.reply("📊 بدأ تحليل EUR/USD.\nأرسل السعر الحالي.");
   });
 
   bot.on("message:text", async (ctx) => {
@@ -94,13 +145,18 @@ export function registerCommands(bot) {
     }
 
     session.prices.push(price);
-    session.prices = session.prices.slice(-10);
+    session.prices = session.prices.slice(-7);
+
+    if (session.prices.length < 5) {
+      await ctx.reply(
+        `💰 السعر: ${price}\n` +
+        `📊 القراءات: ${session.prices.length}/5`
+      );
+      return;
+    }
 
     await ctx.reply(
-      `💰 السعر المستلم: ${price}\n\n` +
-      `عدد القراءات: ${session.prices.length}\n\n` +
-      analyzePrices(session.prices)
+      analyzePrices(session.prices, session.market)
     );
   });
 }
-
