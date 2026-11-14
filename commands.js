@@ -12,28 +12,28 @@ function normalizeDigits(value) {
 function parsePrice(value) {
   const cleaned = normalizeDigits(value).trim();
   if (!/^\d+(\.\d+)?$/.test(cleaned)) return null;
-
   const number = Number(cleaned);
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
 function durationFor(strength) {
-  if (strength === "strong") return "دقيقتان";
-  if (strength === "medium") return "45 ثانية";
-  return "30 ثانية";
+  return strength === "strong" ? "دقيقتان" : "45 ثانية";
 }
+
+// ==============================
+// Smart: تحليل يدوي
+// ==============================
 
 function analyzeSmart(data) {
   const { high, low, open, current } = data;
   const range = high - low;
 
   if (range <= 0) {
-    return "⚠️ الأسعار غير صحيحة. أعد المحاولة باستخدام أعلى سعر أكبر من أقل سعر.";
+    return "⚠️ الأسعار غير صحيحة. أعد المحاولة.";
   }
 
   const position = (current - low) / range;
   const change = current - open;
-  const threshold = range * 0.08;
 
   let decision = "⏸ انتظار";
   let strength = "weak";
@@ -45,10 +45,10 @@ function analyzeSmart(data) {
   } else if (current < low) {
     decision = "🔴 بيع DOWN";
     strength = "strong";
-  } else if (change > threshold && position >= 0.65) {
+  } else if (change > range * 0.08 && position >= 0.65) {
     decision = "🟢 شراء UP";
     strength = "medium";
-  } else if (change < -threshold && position <= 0.35) {
+  } else if (change < -range * 0.08 && position <= 0.35) {
     decision = "🔴 بيع DOWN";
     strength = "medium";
   }
@@ -75,47 +75,151 @@ function analyzeSmart(data) {
     `🎯 القرار: ${decision}\n` +
     `💪 قوة الترجيح: ${confidence}\n` +
     `⏱️ المدة المقترحة: ${duration}\n` +
-    `📉 فريم التحليل: دقيقة واحدة\n\n` +
-    `⚠️ هذا تحليل تقديري من الأسعار المدخلة، وليس ضمانًا لنتيجة الصفقة.`
+    `📉 الفريم: دقيقة واحدة\n\n` +
+    `⚠️ تحليل تقديري من الأسعار المدخلة، وليس ضمانًا للربح.`
   );
 }
 
-function analyzeEurUsd(prices) {
-  const first = prices[0];
-  const last = prices[prices.length - 1];
-  const difference = last - first;
+// ==============================
+// EUR/USD: بيانات تلقائية
+// ==============================
 
-  let trend = "متذبذب";
-  let decision = "⏸ انتظار";
+function calculateEMA(values, period) {
+  const multiplier = 2 / (period + 1);
+  let ema = values.slice(0, period)
+    .reduce((sum, value) => sum + value, 0) / period;
 
-  if (difference > 0) {
-    trend = "صاعد";
-    decision = "🟢 شراء UP";
-  } else if (difference < 0) {
-    trend = "هابط";
-    decision = "🔴 بيع DOWN";
+  for (let i = period; i < values.length; i++) {
+    ema = (values[i] - ema) * multiplier + ema;
   }
 
-  const strength =
-    Math.abs(difference) > first * 0.0005
-      ? "متوسطة"
-      : "ضعيفة";
-
-  if (strength === "ضعيفة") {
-    decision = "⏸ انتظار";
-  }
-
-  return (
-    `📊 تحليل EUR/USD - Masaad\n\n` +
-    `💰 أول سعر: ${first}\n` +
-    `💰 آخر سعر: ${last}\n` +
-    `📈 الاتجاه: ${trend}\n` +
-    `🎯 القرار: ${decision}\n` +
-    `💪 قوة الترجيح: ${strength}\n` +
-    `⏱️ الفريم: دقيقة واحدة\n\n` +
-    `⚠️ التحليل مبني على الأسعار التي أرسلتها، وليس على بيانات سوق مباشرة.`
-  );
+  return ema;
 }
+
+function calculateRSI(values, period = 14) {
+  if (values.length <= period) return 50;
+
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = 1; i <= period; i++) {
+    const difference = values[i] - values[i - 1];
+    if (difference > 0) gains += difference;
+    else losses += Math.abs(difference);
+  }
+
+  let averageGain = gains / period;
+  let averageLoss = losses / period;
+
+  for (let i = period + 1; i < values.length; i++) {
+    const difference = values[i] - values[i - 1];
+    const gain = Math.max(difference, 0);
+    const loss = Math.max(-difference, 0);
+
+    averageGain = (averageGain * (period - 1) + gain) / period;
+    averageLoss = (averageLoss * (period - 1) + loss) / period;
+  }
+
+  if (averageLoss === 0) return 100;
+
+  const rs = averageGain / averageLoss;
+  return 100 - 100 / (1 + rs);
+}
+
+async function analyzeEurUsd() {
+  const apiKey = process.env.TWELVEDATA_API_KEY;
+
+  if (!apiKey) {
+    return "⚠️ لم أجد TWELVEDATA_API_KEY في إعدادات FadeHost.";
+  }
+
+  try {
+    const url = new URL("https://api.twelvedata.com/time_series");
+    url.searchParams.set("symbol", "EUR/USD");
+    url.searchParams.set("interval", "1min");
+    url.searchParams.set("outputsize", "40");
+    url.searchParams.set("apikey", apiKey);
+
+    const response = await fetch(url);
+    const result = await response.json();
+
+    if (!response.ok || result.status === "error" || !result.values) {
+      return (
+        "⚠️ تعذر جلب بيانات EUR/USD.\n" +
+        (result.message || "تحقق من مفتاح Twelve Data وحدود الاستخدام.")
+      );
+    }
+
+    // Twelve Data يعيد أحدث شمعة أولاً؛ نعكس الترتيب للحساب.
+    const candles = result.values.slice().reverse();
+    const closes = candles.map(c => Number(c.close));
+
+    if (closes.length < 22 || closes.some(v => !Number.isFinite(v))) {
+      return "⚠️ البيانات المستلمة غير كافية للتحليل.";
+    }
+
+    const ema9 = calculateEMA(closes, 9);
+    const ema21 = calculateEMA(closes, 21);
+    const rsi = calculateRSI(closes, 14);
+
+    const last = candles[candles.length - 1];
+    const previous = candles[candles.length - 2];
+
+    const current = Number(last.close);
+    const previousClose = Number(previous.close);
+
+    const bullish =
+      ema9 > ema21 &&
+      rsi >= 52 &&
+      rsi < 70 &&
+      current > previousClose;
+
+    const bearish =
+      ema9 < ema21 &&
+      rsi <= 48 &&
+      rsi > 30 &&
+      current < previousClose;
+
+    let decision = "⏸ انتظار";
+    let strength = "غير كافية";
+    let duration = "لا توجد صفقة مقترحة";
+    let trend = "متذبذب";
+
+    if (ema9 > ema21) trend = "صاعد";
+    if (ema9 < ema21) trend = "هابط";
+
+    if (bullish) {
+      decision = "🟢 شراء UP";
+      strength = rsi >= 55 ? "قوية نسبيًا" : "متوسطة";
+      duration = rsi >= 55 ? "دقيقتان" : "45 ثانية";
+    } else if (bearish) {
+      decision = "🔴 بيع DOWN";
+      strength = rsi <= 45 ? "قوية نسبيًا" : "متوسطة";
+      duration = rsi <= 45 ? "دقيقتان" : "45 ثانية";
+    }
+
+    return (
+      `📊 تحليل EUR/USD - Masaad\n\n` +
+      `💰 السعر الحالي: ${current}\n` +
+      `📈 الاتجاه: ${trend}\n` +
+      `EMA 9: ${ema9.toFixed(5)}\n` +
+      `EMA 21: ${ema21.toFixed(5)}\n` +
+      `RSI: ${rsi.toFixed(2)}\n\n` +
+      `🎯 القرار: ${decision}\n` +
+      `💪 قوة الترجيح: ${strength}\n` +
+      `⏱️ المدة المقترحة: ${duration}\n` +
+      `📉 الفريم: دقيقة واحدة\n` +
+      `🕯️ وقت آخر شمعة: ${last.datetime}\n\n` +
+      `⚠️ البيانات من Twelve Data، وقد تختلف عن سعر EUR/USD OTC في ExpertOption. الإشارة تقديرية وليست ضمانًا للربح.`
+    );
+  } catch (error) {
+    return "⚠️ حدث خطأ أثناء الاتصال بمصدر بيانات EUR/USD. حاول مرة أخرى.";
+  }
+}
+
+// ==============================
+// أوامر البوت
+// ==============================
 
 export function registerCommands(bot) {
   bot.command("start", async ctx => {
@@ -123,19 +227,18 @@ export function registerCommands(bot) {
 
     await ctx.reply(
       "أهلًا بك في Masaad 🤖\n\n" +
-      "📊 تحليل Smart اليدوي\n" +
-      "💱 تحليل EUR/USD\n\n" +
-      "أرسل /help لمعرفة الأوامر."
+      "📊 /smart - تحليل Smart اليدوي\n" +
+      "💱 /eurusd - تحليل اليورو تلقائيًا\n" +
+      "📋 /help - المساعدة"
     );
   });
 
   bot.command("help", async ctx => {
     await ctx.reply(
       "📋 أوامر Masaad\n\n" +
-      "/smart - تحليل Smart\n" +
-      "/eurusd - تحليل EUR/USD\n" +
-      "/cancel - إلغاء التحليل الحالي\n\n" +
-      "أرسل الأسعار عندما يطلبها منك البوت."
+      "/smart - تحليل Smart بإدخال الأسعار\n" +
+      "/eurusd - تحليل EUR/USD تلقائيًا\n" +
+      "/cancel - إلغاء التحليل اليدوي"
     );
   });
 
@@ -153,21 +256,17 @@ export function registerCommands(bot) {
   });
 
   bot.command("eurusd", async ctx => {
-    sessions.set(ctx.chat.id, {
-      type: "eurusd",
-      step: 0,
-      prices: []
-    });
+    sessions.delete(ctx.chat.id);
 
-    await ctx.reply(
-      "📊 تحليل EUR/USD\n\n" +
-      "أرسل السعر الأول، ثم سأطلب منك 4 أسعار أخرى."
-    );
+    await ctx.reply("⏳ جاري جلب بيانات EUR/USD وتحليل السوق...");
+
+    const analysis = await analyzeEurUsd();
+    await ctx.reply(analysis);
   });
 
   bot.command("cancel", async ctx => {
     sessions.delete(ctx.chat.id);
-    await ctx.reply("تم إلغاء التحليل. أرسل /smart أو /eurusd للبدء من جديد.");
+    await ctx.reply("تم إلغاء التحليل الحالي.");
   });
 
   bot.on("message:text", async ctx => {
@@ -178,11 +277,9 @@ export function registerCommands(bot) {
 
     const session = sessions.get(chatId);
 
-    if (!session) {
+    if (!session || session.type !== "smart") {
       await ctx.reply(
-        "اختر نوع التحليل:\n\n" +
-        "/smart لتحليل Smart\n" +
-        "/eurusd لتحليل EUR/USD"
+        "اختر التحليل:\n/smart لتحليل Smart\n/eurusd لتحليل اليورو تلقائيًا"
       );
       return;
     }
@@ -190,54 +287,37 @@ export function registerCommands(bot) {
     const price = parsePrice(text);
 
     if (price === null) {
-      await ctx.reply("⚠️ أرسل سعرًا رقميًا صحيحًا، مثل: 264.3930");
+      await ctx.reply("⚠️ أرسل سعرًا رقميًا صحيحًا، مثل: 263.643");
       return;
     }
 
-    if (session.type === "smart") {
-      const prompts = [
-        "🔻 أرسل أقل سعر للشمعة السابقة:",
-        "🕯️ أرسل سعر افتتاح الشمعة الجديدة:",
-        "💰 أرسل السعر الحالي:"
-      ];
+    const prompts = [
+      "🔻 أرسل أقل سعر للشمعة السابقة:",
+      "🕯️ أرسل سعر افتتاح الشمعة الجديدة:",
+      "💰 أرسل السعر الحالي:"
+    ];
 
-      const fields = ["high", "low", "open", "current"];
-      session.values[fields[session.step]] = price;
-      session.step++;
+    const fields = ["high", "low", "open", "current"];
 
-      if (session.step < 4) {
-        sessions.set(chatId, session);
-        await ctx.reply(prompts[session.step - 1]);
-        return;
-      }
+    session.values[fields[session.step]] = price;
+    session.step++;
 
-      sessions.delete(chatId);
-
-      if (session.values.high <= session.values.low) {
-        await ctx.reply(
-          "⚠️ أعلى سعر يجب أن يكون أكبر من أقل سعر.\nأرسل /smart للبدء من جديد."
-        );
-        return;
-      }
-
-      await ctx.reply(analyzeSmart(session.values));
+    if (session.step < 4) {
+      sessions.set(chatId, session);
+      await ctx.reply(prompts[session.step - 1]);
       return;
     }
 
-    if (session.type === "eurusd") {
-      session.prices.push(price);
-      session.step++;
+    sessions.delete(chatId);
 
-      if (session.prices.length < 5) {
-        sessions.set(chatId, session);
-        await ctx.reply(
-          `تم تسجيل السعر ${session.prices.length} من 5.\nأرسل السعر التالي:`
-        );
-        return;
-      }
-
-      sessions.delete(chatId);
-      await ctx.reply(analyzeEurUsd(session.prices));
+    if (session.values.high <= session.values.low) {
+      await ctx.reply(
+        "⚠️ أعلى سعر يجب أن يكون أكبر من أقل سعر.\nأرسل /smart للبدء من جديد."
+      );
+      return;
     }
+
+    await ctx.reply(analyzeSmart(session.values));
   });
 }
+
