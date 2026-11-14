@@ -10,6 +10,53 @@ function parsePrice(text) {
   return Number.isFinite(price) && price > 0 ? price : null;
 }
 
+// الوقت الحالي بتوقيت السعودية
+function getSaudiMinute() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Riyadh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(new Date());
+
+  const get = type => parts.find(p => p.type === type).value;
+
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+// تحويل وقت الشمعة السعودية إلى وقت قابل للمقارنة
+function candleTimestamp(datetime) {
+  const match = datetime.match(
+    /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/
+  );
+
+  if (!match) return NaN;
+
+  const [, year, month, day, hour, minute, second] = match;
+
+  return Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour) - 3,
+    Number(minute),
+    Number(second)
+  );
+}
+
+function formatSaudiTime(datetime) {
+  const match = datetime.match(
+    /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/
+  );
+
+  if (!match) return datetime;
+
+  return `${match[3]}/${match[2]}/${match[1]} ${match[4]}:${match[5]} بتوقيت السعودية`;
+}
+
 function calculateEMA(values, period) {
   const k = 2 / (period + 1);
   let result = values[0];
@@ -45,14 +92,17 @@ async function analyzeEurusd(ctx) {
     return ctx.reply("⚠️ مفتاح Twelve Data غير موجود في FadeHost.");
   }
 
-  await ctx.reply("⏳ جارٍ سحب بيانات EUR/USD...");
+  await ctx.reply("⏳ جارٍ سحب بيانات اليورو وفحص الشموع...");
 
   try {
-    const url = new URL("https://api.twelvedata.com/time_series");
+    const url = new URL(
+      "https://api.twelvedata.com/time_series"
+    );
 
     url.searchParams.set("symbol", "EUR/USD");
     url.searchParams.set("interval", "1min");
-    url.searchParams.set("outputsize", "50");
+    url.searchParams.set("outputsize", "60");
+    url.searchParams.set("timezone", "Asia/Riyadh");
     url.searchParams.set("apikey", key);
 
     const response = await fetch(url);
@@ -60,7 +110,7 @@ async function analyzeEurusd(ctx) {
 
     if (!response.ok || !data.values) {
       return ctx.reply(
-        "⚠️ تعذر سحب البيانات: " +
+        "⚠️ تعذر سحب البيانات:\n" +
         (data.message || "تحقق من مفتاح API.")
       );
     }
@@ -69,22 +119,51 @@ async function analyzeEurusd(ctx) {
       open: Number(c.open),
       close: Number(c.close),
       time: c.datetime
-    })).reverse();
+    }));
 
-    const closes = candles.map(c => c.close);
+    const currentMinute = getSaudiMinute();
+
+    // استبعاد شمعة الدقيقة التي لم تكتمل بعد
+    const completedCandles = candles.filter(c =>
+      c.time < currentMinute &&
+      Number.isFinite(c.open) &&
+      Number.isFinite(c.close)
+    );
+
+    if (completedCandles.length < 22) {
+      return ctx.reply(
+        "⚠️ لا توجد شموع مكتملة كافية للتحليل."
+      );
+    }
+
+    // أحدث شمعة مكتملة
+    const lastCandle = completedCandles[0];
+
+    // فحص عمر آخر شمعة
+    const candleTime = candleTimestamp(lastCandle.time);
+    const ageMinutes = (Date.now() - candleTime) / 60000;
 
     if (
-      closes.length < 22 ||
-      closes.some(v => !Number.isFinite(v))
+      !Number.isFinite(candleTime) ||
+      ageMinutes < 0 ||
+      ageMinutes > 4
     ) {
-      return ctx.reply("⚠️ البيانات غير كافية للتحليل.");
+      return ctx.reply(
+        "⚠️ بيانات اليورو قديمة أو وقتها غير صحيح.\n" +
+        "لن أعطي إشارة حتى تصل بيانات حديثة."
+      );
     }
+
+    // ترتيب الشموع من الأقدم إلى الأحدث
+    completedCandles.reverse();
+
+    const closes = completedCandles.map(c => c.close);
 
     const ema9 = calculateEMA(closes, 9);
     const ema21 = calculateEMA(closes, 21);
     const currentRsi = calculateRSI(closes);
-    const lastCandle = candles[candles.length - 1];
 
+    const latest = completedCandles[completedCandles.length - 1];
     const difference = ema9 - ema21;
 
     let direction = "متذبذب";
@@ -101,14 +180,14 @@ async function analyzeEurusd(ctx) {
       strongGap &&
       currentRsi >= 55 &&
       currentRsi < 70 &&
-      lastCandle.close > lastCandle.open;
+      latest.close > latest.open;
 
     const bearish =
       difference < 0 &&
       strongGap &&
       currentRsi <= 45 &&
       currentRsi > 30 &&
-      lastCandle.close < lastCandle.open;
+      latest.close < latest.open;
 
     if (bullish) {
       signal = "🟢 شراء UP";
@@ -120,7 +199,7 @@ async function analyzeEurusd(ctx) {
 
     await ctx.reply(
       "📊 تحليل EUR/USD - Masaad\n\n" +
-      "💰 السعر الحالي: " + lastCandle.close.toFixed(5) + "\n" +
+      "💰 السعر: " + latest.close.toFixed(5) + "\n" +
       "📈 الاتجاه: " + direction + "\n" +
       "EMA 9: " + ema9.toFixed(5) + "\n" +
       "EMA 21: " + ema21.toFixed(5) + "\n" +
@@ -128,13 +207,19 @@ async function analyzeEurusd(ctx) {
       "🎯 القرار: " + signal + "\n" +
       "💪 قوة الترجيح: " + strength + "\n" +
       "⏱ الفريم: دقيقة واحدة\n" +
-      "🕒 آخر شمعة: " + lastCandle.time + "\n\n" +
-      "⚠️ تحليل فني احتمالي وليس ضماناً للربح."
+      "🕯 الشمعة: مكتملة\n" +
+      "🕒 وقت الشمعة: " +
+      formatSaudiTime(latest.time) + "\n" +
+      "🕒 وقت الفحص: " + currentMinute +
+      " بتوقيت السعودية\n\n" +
+      "⚠️ تحليل احتمالي وليس ضماناً للربح."
     );
 
   } catch (error) {
     console.error("EURUSD error:", error);
-    await ctx.reply("⚠️ حدث خطأ أثناء تحليل اليورو.");
+    await ctx.reply(
+      "⚠️ حدث خطأ أثناء تحليل اليورو. حاول مرة أخرى."
+    );
   }
 }
 
@@ -156,7 +241,7 @@ export function registerCommands(bot) {
     await ctx.reply(
       "📊 تم اختيار Smart\n\n" +
       "أرسل سعر السوق الحالي فقط.\n" +
-      "سنحتاج 5 قراءات لتحليل الاتجاه."
+      "نحتاج 5 قراءات لتحليل الاتجاه."
     );
   });
 
@@ -203,7 +288,6 @@ export function registerCommands(bot) {
 
     const first = prices[0];
     const last = prices[prices.length - 1];
-
     const change = ((last - first) / first) * 100;
 
     let direction = "متذبذب";
@@ -230,4 +314,3 @@ export function registerCommands(bot) {
     );
   });
 }
-
