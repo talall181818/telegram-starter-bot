@@ -35,7 +35,9 @@ function normalizeDigits(value) {
 
 function parsePrice(value) {
   const cleaned = normalizeDigits(value).trim();
+
   if (!/^\d+(\.\d+)?$/.test(cleaned)) return null;
+
   const number = Number(cleaned);
   return Number.isFinite(number) && number > 0 ? number : null;
 }
@@ -143,6 +145,10 @@ function calculateRSI(values, period = 14) {
   return 100 - 100 / (1 + rs);
 }
 
+// ==============================
+// فحص الاتجاه والشموع المغلقة
+// ==============================
+
 function inspectTrend(candles) {
   const closes = candles.map(c => Number(c.close));
 
@@ -156,16 +162,31 @@ function inspectTrend(candles) {
 
   const recent = candles.slice(-4);
   const firstClose = Number(recent[0].close);
-  const last = recent[recent.length - 1];
+  const last = recent[3];
+  const previous = recent[2];
+
   const lastClose = Number(last.close);
   const lastOpen = Number(last.open);
+
+  const lastTwoUp =
+    Number(previous.close) > Number(previous.open) &&
+    lastClose > lastOpen;
+
+  const lastTwoDown =
+    Number(previous.close) < Number(previous.open) &&
+    lastClose < lastOpen;
 
   let upCandles = 0;
   let downCandles = 0;
 
   for (const candle of recent) {
-    if (Number(candle.close) > Number(candle.open)) upCandles++;
-    if (Number(candle.close) < Number(candle.open)) downCandles++;
+    if (Number(candle.close) > Number(candle.open)) {
+      upCandles++;
+    }
+
+    if (Number(candle.close) < Number(candle.open)) {
+      downCandles++;
+    }
   }
 
   let trend = "متذبذب";
@@ -173,7 +194,8 @@ function inspectTrend(candles) {
   if (
     ema9 > ema21 &&
     lastClose > firstClose &&
-    upCandles >= 2
+    upCandles >= 3 &&
+    lastTwoUp
   ) {
     trend = "صاعد";
   }
@@ -181,7 +203,8 @@ function inspectTrend(candles) {
   if (
     ema9 < ema21 &&
     lastClose < firstClose &&
-    downCandles >= 2
+    downCandles >= 3 &&
+    lastTwoDown
   ) {
     trend = "هابط";
   }
@@ -198,6 +221,8 @@ function inspectTrend(candles) {
     price: lastClose,
     candleUp: lastClose > lastOpen,
     candleDown: lastClose < lastOpen,
+    lastTwoUp,
+    lastTwoDown,
     bodyRatio,
     time: last.datetime
   };
@@ -214,7 +239,9 @@ async function fetchCandles(interval) {
     throw new Error("أضف TWELVEDATA_API_KEY في FadeHost.");
   }
 
-  const url = new URL("https://api.twelvedata.com/time_series");
+  const url = new URL(
+    "https://api.twelvedata.com/time_series"
+  );
 
   url.searchParams.set("symbol", "EUR/USD");
   url.searchParams.set("interval", interval);
@@ -225,16 +252,26 @@ async function fetchCandles(interval) {
   const result = await response.json();
 
   if (!response.ok || result.status === "error" || !result.values) {
-    throw new Error(result.message || "تعذر الحصول على بيانات السوق.");
+    throw new Error(
+      result.message || "تعذر الحصول على بيانات السوق."
+    );
   }
 
-  return result.values.slice().reverse();
+  // استبعاد أحدث شمعة احتياطياً لأنها قد تكون غير مكتملة
+  return result.values.slice(1).reverse();
 }
 
 async function fetchCurrentPrice() {
   const apiKey = process.env.TWELVEDATA_API_KEY;
 
-  const url = new URL("https://api.twelvedata.com/price");
+  if (!apiKey) {
+    throw new Error("أضف TWELVEDATA_API_KEY في FadeHost.");
+  }
+
+  const url = new URL(
+    "https://api.twelvedata.com/price"
+  );
+
   url.searchParams.set("symbol", "EUR/USD");
   url.searchParams.set("apikey", apiKey);
 
@@ -244,7 +281,9 @@ async function fetchCurrentPrice() {
   const price = Number(result.price);
 
   if (!response.ok || !Number.isFinite(price) || price <= 0) {
-    throw new Error(result.message || "تعذر قراءة سعر التقييم.");
+    throw new Error(
+      result.message || "تعذر قراءة سعر التقييم."
+    );
   }
 
   return price;
@@ -254,29 +293,28 @@ async function fetchCurrentPrice() {
 // اختيار مدة الإشارة
 // ==============================
 
-function chooseDuration(one, five) {
-  const rsi = one.rsi;
-
+function chooseDuration(one) {
   if (
-    one.bodyRatio >= 0.75 &&
-    ((one.trend === "صاعد" && rsi >= 62) ||
-     (one.trend === "هابط" && rsi <= 38))
+    one.bodyRatio >= 0.80 &&
+    (
+      (one.trend === "صاعد" && one.rsi >= 62) ||
+      (one.trend === "هابط" && one.rsi <= 38)
+    )
   ) {
     return 30;
   }
 
   if (
-    one.bodyRatio >= 0.60 &&
-    ((one.trend === "صاعد" && rsi >= 58) ||
-     (one.trend === "هابط" && rsi <= 42))
+    one.bodyRatio >= 0.70 &&
+    (
+      (one.trend === "صاعد" && one.rsi >= 60) ||
+      (one.trend === "هابط" && one.rsi <= 40)
+    )
   ) {
     return 45;
   }
 
-  if (
-    (one.trend === "صاعد" && rsi >= 54 && rsi <= 67) ||
-    (one.trend === "هابط" && rsi >= 33 && rsi <= 46)
-  ) {
+  if (one.bodyRatio >= 0.55) {
     return 60;
   }
 
@@ -338,6 +376,7 @@ async function evaluateSignal(signal, bot) {
   } catch (error) {
     signal.result = "ERROR";
     signal.error = error.message;
+
     await saveSignals();
 
     await bot.api.sendMessage(
@@ -371,6 +410,9 @@ async function analyzeEurUsd() {
   const one = inspectTrend(candles1m);
   const five = inspectTrend(candles5m);
 
+  // السعر الحي وقت التحليل
+  const livePrice = await fetchCurrentPrice();
+
   let direction = null;
   let strength = "غير كافية";
   let duration = null;
@@ -378,29 +420,31 @@ async function analyzeEurUsd() {
   const buyConfirmed =
     one.trend === "صاعد" &&
     five.trend === "صاعد" &&
-    one.candleUp &&
+    one.lastTwoUp &&
+    one.bodyRatio >= 0.55 &&
     one.ema9 > one.ema21 &&
-    one.rsi >= 54 &&
-    one.rsi <= 67;
+    one.rsi >= 55 &&
+    one.rsi <= 65;
 
   const sellConfirmed =
     one.trend === "هابط" &&
     five.trend === "هابط" &&
-    one.candleDown &&
+    one.lastTwoDown &&
+    one.bodyRatio >= 0.55 &&
     one.ema9 < one.ema21 &&
-    one.rsi >= 33 &&
-    one.rsi <= 46;
+    one.rsi >= 35 &&
+    one.rsi <= 45;
 
   if (buyConfirmed) {
     direction = "BUY";
-    strength = "تأكيد فني";
+    strength = "تأكيد فني مشدد";
   } else if (sellConfirmed) {
     direction = "SELL";
-    strength = "تأكيد فني";
+    strength = "تأكيد فني مشدد";
   }
 
   if (direction) {
-    duration = chooseDuration(one, five);
+    duration = chooseDuration(one);
   }
 
   const decision =
@@ -410,7 +454,7 @@ async function analyzeEurUsd() {
 
   const message =
     `📊 تحليل EUR/USD - Masaad\n\n` +
-    `💰 السعر: ${one.price}\n\n` +
+    `💰 السعر: ${livePrice}\n\n` +
     `📈 اتجاه الدقيقة: ${one.trend}\n` +
     `📉 اتجاه 5 دقائق: ${five.trend}\n\n` +
     `EMA 9: ${one.ema9.toFixed(5)}\n` +
@@ -421,13 +465,13 @@ async function analyzeEurUsd() {
     `⏱️ المدة المقترحة: ${duration ? duration + " ثانية" : "لا توجد صفقة"}\n\n` +
     `🕯️ آخر شمعة دقيقة: ${one.time}\n` +
     `🕯️ آخر شمعة 5 دقائق: ${five.time}\n\n` +
-    `⚠️ الإشارة تقديرية وليست مضمونة. بيانات Twelve Data قد تختلف عن ExpertOption OTC.`;
+    `⚠️ إشارة تقديرية وليست مضمونة. بيانات Twelve Data قد تختلف عن ExpertOption OTC.`;
 
   return {
     message,
     direction,
     duration,
-    price: one.price
+    price: livePrice
   };
 }
 
@@ -442,13 +486,28 @@ async function getStats() {
     ["WIN", "LOSS", "DRAW"].includes(s.result)
   );
 
-  const wins = completed.filter(s => s.result === "WIN").length;
-  const losses = completed.filter(s => s.result === "LOSS").length;
-  const draws = completed.filter(s => s.result === "DRAW").length;
-  const pending = signals.filter(s => s.result === "PENDING").length;
-  const errors = signals.filter(s => s.result === "ERROR").length;
+  const wins = completed.filter(
+    s => s.result === "WIN"
+  ).length;
+
+  const losses = completed.filter(
+    s => s.result === "LOSS"
+  ).length;
+
+  const draws = completed.filter(
+    s => s.result === "DRAW"
+  ).length;
+
+  const pending = signals.filter(
+    s => s.result === "PENDING"
+  ).length;
+
+  const errors = signals.filter(
+    s => s.result === "ERROR"
+  ).length;
 
   const counted = wins + losses;
+
   const accuracy = counted > 0
     ? (wins / counted * 100).toFixed(1)
     : "0.0";
@@ -542,6 +601,7 @@ export function registerCommands(bot) {
       );
 
       evaluateSignal(signal, bot).catch(() => {});
+
     } catch (error) {
       await ctx.reply(
         `⚠️ تعذر تحليل EUR/USD:\n${error.message}`
@@ -576,7 +636,9 @@ export function registerCommands(bot) {
     const price = parsePrice(text);
 
     if (price === null) {
-      await ctx.reply("⚠️ أرسل سعرًا رقميًا صحيحًا، مثل: 263.643");
+      await ctx.reply(
+        "⚠️ أرسل سعرًا رقميًا صحيحًا، مثل: 263.643"
+      );
       return;
     }
 
@@ -612,11 +674,12 @@ export function registerCommands(bot) {
       session.values.open < session.values.low ||
       session.values.current <= 0
     ) {
-      await ctx.reply("⚠️ تحقق من الأسعار المدخلة وأعد التحليل.");
+      await ctx.reply(
+        "⚠️ تحقق من الأسعار المدخلة وأعد التحليل."
+      );
       return;
     }
 
     await ctx.reply(analyzeSmart(session.values));
   });
 }
-
