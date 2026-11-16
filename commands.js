@@ -316,7 +316,7 @@ async function analyzeEurUsd() {
 
   // منع الدخول المتأخر
   const distanceFromEma = Math.abs(livePrice - ema9);
-  const notChasing = distanceFromEma <= averageRange * 0.65;
+  const notChasing = distanceFromEma <= averageRange * 1.0;
 
   let direction = null;
   let strength = "";
@@ -695,3 +695,4 @@ export function registerCommands(bot) {
     await ctx.reply(analyzeSmart(session.values));
   });
 }
+
