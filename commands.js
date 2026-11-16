@@ -207,15 +207,15 @@ function chooseDuration(rsi, direction) {
     ? rsi - 50
     : 50 - rsi;
 
-  if (strength >= 12) return 30;
-  if (strength >= 8) return 45;
-  if (strength >= 5) return 60;
+  if (strength >= 10) return 30;
+  if (strength >= 6) return 45;
+  if (strength >= 3) return 60;
 
   return 120;
 }
 
 // ==============================
-// استراتيجية الدخول بعد التصحيح
+// استراتيجية EUR/USD المرنة
 // ==============================
 
 async function analyzeEurUsd() {
@@ -267,65 +267,108 @@ async function analyzeEurUsd() {
     throw new Error("مدى حركة السعر غير صالح.");
   }
 
-  const maxDistance = averageRange * 0.15;
+  // ==============================
+  // حساب نقاط الشراء والبيع
+  // ==============================
+
+  let buyScore = 0;
+  let sellScore = 0;
+
+  // اتجاه المتوسطات
+  if (ema9 > ema21) buyScore += 2;
+  if (ema9 < ema21) sellScore += 2;
+
+  // موقع السعر من EMA 9
+  if (livePrice > ema9) buyScore += 2;
+  if (livePrice < ema9) sellScore += 2;
+
+  // لون شمعة التأكيد
+  if (confirm.close > confirm.open) buyScore += 1;
+  if (confirm.close < confirm.open) sellScore += 1;
+
+  // حركة السعر من الإغلاق السابق
+  if (livePrice > confirm.close) buyScore += 1;
+  if (livePrice < confirm.close) sellScore += 1;
+
+  // اختراق قمة أو قاع الشمعة
+  if (livePrice > confirm.high) buyScore += 1;
+  if (livePrice < confirm.low) sellScore += 1;
+
+  // التصحيح الصاعد
+  if (
+    pullback.close < pullback.open &&
+    pullback.low <= ema9 + averageRange * 0.20
+  ) {
+    buyScore += 1;
+  }
+
+  // التصحيح الهابط
+  if (
+    pullback.close > pullback.open &&
+    pullback.high >= ema9 - averageRange * 0.20
+  ) {
+    sellScore += 1;
+  }
+
+  // RSI بحدود أكثر مرونة
+  if (rsi >= 49 && rsi <= 68) buyScore += 1;
+  if (rsi >= 32 && rsi <= 51) sellScore += 1;
+
+  // منع الدخول المتأخر
+  const distanceFromEma = Math.abs(livePrice - ema9);
+  const notChasing = distanceFromEma <= averageRange * 0.65;
 
   let direction = null;
-  let strength = "لم يكتمل التصحيح والتأكيد";
+  let strength = "";
 
   // ==============================
-  // شراء بعد التصحيح
+  // قرار الشراء
   // ==============================
 
-  const bullishTrend = ema9 > ema21;
-
-  const bullishPullback =
-    pullback.close < pullback.open &&
-    pullback.low <= ema9 + averageRange * 0.15;
-
-  const bullishConfirmation =
-    confirm.close > confirm.open &&
-    confirm.close > (pullback.open + pullback.close) / 2;
-
-  const buyReady =
-    bullishTrend &&
-    bullishPullback &&
-    bullishConfirmation &&
-    livePrice > confirm.high &&
-    livePrice > ema9 &&
-    livePrice - confirm.high <= maxDistance &&
-    rsi >= 52 &&
-    rsi <= 66;
-
-  // ==============================
-  // بيع بعد التصحيح
-  // ==============================
-
-  const bearishTrend = ema9 < ema21;
-
-  const bearishPullback =
-    pullback.close > pullback.open &&
-    pullback.high >= ema9 - averageRange * 0.15;
-
-  const bearishConfirmation =
-    confirm.close < confirm.open &&
-    confirm.close < (pullback.open + pullback.close) / 2;
-
-  const sellReady =
-    bearishTrend &&
-    bearishPullback &&
-    bearishConfirmation &&
-    livePrice < confirm.low &&
-    livePrice < ema9 &&
-    confirm.low - livePrice <= maxDistance &&
-    rsi <= 48 &&
-    rsi >= 34;
-
-  if (buyReady) {
+  if (
+    buyScore >= 5 &&
+    buyScore - sellScore >= 2 &&
+    livePrice >= ema9 &&
+    notChasing
+  ) {
     direction = "BUY";
-    strength = "تصحيح مكتمل وعودة الزخم الصاعد";
-  } else if (sellReady) {
+
+    strength = buyScore >= 7
+      ? "شراء - تأكيد جيد"
+      : "شراء - تأكيد متوسط";
+  }
+
+  // ==============================
+  // قرار البيع
+  // ==============================
+
+  else if (
+    sellScore >= 5 &&
+    sellScore - buyScore >= 2 &&
+    livePrice <= ema9 &&
+    notChasing
+  ) {
     direction = "SELL";
-    strength = "تصحيح مكتمل وعودة الزخم الهابط";
+
+    strength = sellScore >= 7
+      ? "بيع - تأكيد جيد"
+      : "بيع - تأكيد متوسط";
+  }
+
+  // ==============================
+  // حالة الانتظار والتذبذب
+  // ==============================
+
+  else {
+    if (Math.abs(buyScore - sellScore) <= 1) {
+      strength = "تذبذب واضح - لا يوجد اتجاه حاسم";
+    } else if (!notChasing) {
+      strength = "السعر ابتعد عن المتوسط - لا تطارد الدخول";
+    } else if (buyScore > sellScore) {
+      strength = "ميل صاعد لكن التأكيد غير مكتمل";
+    } else {
+      strength = "ميل هابط لكن التأكيد غير مكتمل";
+    }
   }
 
   const decision =
@@ -346,13 +389,15 @@ async function analyzeEurUsd() {
     `📊 RSI 14: ${rsi.toFixed(2)}\n` +
     `📈 EMA 9: ${ema9.toFixed(5)}\n` +
     `📉 EMA 21: ${ema21.toFixed(5)}\n\n` +
+    `🟢 نقاط الشراء: ${buyScore}/10\n` +
+    `🔴 نقاط البيع: ${sellScore}/10\n\n` +
     `🎯 القرار: ${decision}\n` +
     `💪 قوة الترجيح: ${strength}\n` +
     `⏱️ المدة المقترحة: ${
       duration ? duration + " ثانية" : "لا توجد صفقة"
     }\n` +
     `📉 الفريم: دقيقة واحدة\n\n` +
-    `⚠️ دخول بعد التصحيح، وليس ضمانًا للربح.`;
+    `⚠️ إشارات احتمالية وليست ضماناً للربح.`;
 
   return {
     message,
@@ -530,7 +575,7 @@ export function registerCommands(bot) {
   bot.command("eurusd", async ctx => {
     sessions.delete(ctx.chat.id);
 
-    await ctx.reply("⏳ جاري تحليل EUR/USD بعد التصحيح...");
+    await ctx.reply("⏳ جاري تحليل EUR/USD...");
 
     try {
       const analysis = await analyzeEurUsd();
