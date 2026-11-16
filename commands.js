@@ -215,7 +215,7 @@ function chooseDuration(rsi, direction) {
 }
 
 // ==============================
-// استراتيجية الدخول المبكر
+// استراتيجية الدخول بعد التصحيح
 // ==============================
 
 async function analyzeEurUsd() {
@@ -235,59 +235,97 @@ async function analyzeEurUsd() {
   const ema9 = calculateEMA(closes, 9);
   const ema21 = calculateEMA(closes, 21);
 
-  const previous = candles[candles.length - 1];
+  const recent = candles.slice(-4).map(c => ({
+    open: Number(c.open),
+    high: Number(c.high),
+    low: Number(c.low),
+    close: Number(c.close)
+  }));
 
-  const high = Number(previous.high);
-  const low = Number(previous.low);
-  const open = Number(previous.open);
-  const close = Number(previous.close);
+  if (
+    recent.length < 4 ||
+    !recent.every(c =>
+      [c.open, c.high, c.low, c.close].every(Number.isFinite) &&
+      c.high >= c.low &&
+      c.close >= c.low &&
+      c.close <= c.high
+    )
+  ) {
+    throw new Error("بيانات الشموع غير صحيحة.");
+  }
 
   const livePrice = await fetchCurrentPrice();
 
-  if (
-    ![high, low, open, close, livePrice].every(Number.isFinite) ||
-    high <= low
-  ) {
-    throw new Error("بيانات الأسعار غير صحيحة.");
+  const pullback = recent[2];
+  const confirm = recent[3];
+
+  const averageRange = recent.reduce(
+    (sum, c) => sum + (c.high - c.low), 0
+  ) / recent.length;
+
+  if (averageRange <= 0) {
+    throw new Error("مدى حركة السعر غير صالح.");
   }
 
-  const range = high - low;
-
-  // منطقة الدخول المبكر
-  const earlyZone = range * 0.25;
-
-  // هامش صغير بعد الكسر لتجنب مطاردة الحركة
-  const maxChase = range * 0.10;
+  const maxDistance = averageRange * 0.15;
 
   let direction = null;
-  let strength = "غير كافية";
+  let strength = "لم يكتمل التصحيح والتأكيد";
 
-  // بداية الزخم الصاعد قبل الكسر الكامل
-  const earlyBuy =
-    livePrice > close &&
-    livePrice >= high - earlyZone &&
-    livePrice <= high + maxChase &&
-    ema9 > ema21 &&
+  // ==============================
+  // شراء بعد التصحيح
+  // ==============================
+
+  const bullishTrend = ema9 > ema21;
+
+  const bullishPullback =
+    pullback.close < pullback.open &&
+    pullback.low <= ema9 + averageRange * 0.15;
+
+  const bullishConfirmation =
+    confirm.close > confirm.open &&
+    confirm.close > (pullback.open + pullback.close) / 2;
+
+  const buyReady =
+    bullishTrend &&
+    bullishPullback &&
+    bullishConfirmation &&
+    livePrice > confirm.high &&
     livePrice > ema9 &&
+    livePrice - confirm.high <= maxDistance &&
     rsi >= 52 &&
-    rsi < 70;
+    rsi <= 66;
 
-  // بداية الزخم الهابط قبل الكسر الكامل
-  const earlySell =
-    livePrice < close &&
-    livePrice <= low + earlyZone &&
-    livePrice >= low - maxChase &&
-    ema9 < ema21 &&
+  // ==============================
+  // بيع بعد التصحيح
+  // ==============================
+
+  const bearishTrend = ema9 < ema21;
+
+  const bearishPullback =
+    pullback.close > pullback.open &&
+    pullback.high >= ema9 - averageRange * 0.15;
+
+  const bearishConfirmation =
+    confirm.close < confirm.open &&
+    confirm.close < (pullback.open + pullback.close) / 2;
+
+  const sellReady =
+    bearishTrend &&
+    bearishPullback &&
+    bearishConfirmation &&
+    livePrice < confirm.low &&
     livePrice < ema9 &&
+    confirm.low - livePrice <= maxDistance &&
     rsi <= 48 &&
-    rsi > 30;
+    rsi >= 34;
 
-  if (earlyBuy) {
+  if (buyReady) {
     direction = "BUY";
-    strength = "بداية زخم صاعد - دخول مبكر";
-  } else if (earlySell) {
+    strength = "تصحيح مكتمل وعودة الزخم الصاعد";
+  } else if (sellReady) {
     direction = "SELL";
-    strength = "بداية زخم هابط - دخول مبكر";
+    strength = "تصحيح مكتمل وعودة الزخم الهابط";
   }
 
   const decision =
@@ -302,9 +340,9 @@ async function analyzeEurUsd() {
   const message =
     `📊 تحليل EUR/USD - Masaad\n\n` +
     `💰 السعر الحالي: ${livePrice}\n\n` +
-    `🔺 أعلى الشمعة السابقة: ${high}\n` +
-    `🔻 أقل الشمعة السابقة: ${low}\n` +
-    `🕯️ إغلاق الشمعة السابقة: ${close}\n\n` +
+    `🔺 أعلى الشمعة السابقة: ${confirm.high}\n` +
+    `🔻 أقل الشمعة السابقة: ${confirm.low}\n` +
+    `🕯️ إغلاق الشمعة السابقة: ${confirm.close}\n\n` +
     `📊 RSI 14: ${rsi.toFixed(2)}\n` +
     `📈 EMA 9: ${ema9.toFixed(5)}\n` +
     `📉 EMA 21: ${ema21.toFixed(5)}\n\n` +
@@ -314,7 +352,7 @@ async function analyzeEurUsd() {
       duration ? duration + " ثانية" : "لا توجد صفقة"
     }\n` +
     `📉 الفريم: دقيقة واحدة\n\n` +
-    `⚠️ دخول مبكر تقديري وليس مضمونًا.`;
+    `⚠️ دخول بعد التصحيح، وليس ضمانًا للربح.`;
 
   return {
     message,
@@ -462,7 +500,7 @@ export function registerCommands(bot) {
     await ctx.reply(
       "📋 أوامر Masaad\n\n" +
       "/smart - تحليل Smart بكسر الشمعة\n" +
-      "/eurusd - تحليل EUR/USD بالدخول المبكر\n" +
+      "/eurusd - تحليل EUR/USD بعد التصحيح\n" +
       "/stats - إحصائيات الإشارات\n" +
       "/cancel - إلغاء التحليل اليدوي"
     );
@@ -492,7 +530,7 @@ export function registerCommands(bot) {
   bot.command("eurusd", async ctx => {
     sessions.delete(ctx.chat.id);
 
-    await ctx.reply("⏳ جاري تحليل EUR/USD بالدخول المبكر...");
+    await ctx.reply("⏳ جاري تحليل EUR/USD بعد التصحيح...");
 
     try {
       const analysis = await analyzeEurUsd();
