@@ -1,4 +1,3 @@
-
 import fs from "node:fs/promises";
 
 const sessions = new Map();
@@ -22,7 +21,7 @@ async function saveSignals() {
 }
 
 // ==============================
-// أدوات الأسعار
+// الأسعار
 // ==============================
 
 function normalizeDigits(value) {
@@ -35,7 +34,6 @@ function normalizeDigits(value) {
 
 function parsePrice(value) {
   const cleaned = normalizeDigits(value).trim();
-
   if (!/^\d+(\.\d+)?$/.test(cleaned)) return null;
 
   const number = Number(cleaned);
@@ -43,38 +41,26 @@ function parsePrice(value) {
 }
 
 // ==============================
-// Smart اليدوي
+// تحليل Smart - كسر الشمعة فقط
 // ==============================
 
 function analyzeSmart(data) {
   const { high, low, open, current } = data;
-  const range = high - low;
 
-  if (range <= 0) return "⚠️ الأسعار غير صحيحة.";
-
-  const position = (current - low) / range;
-  const change = current - open;
+  if (high <= low) return "⚠️ الأسعار غير صحيحة.";
 
   let decision = "⏸ انتظار";
-  let strength = "غير كافية";
-  let duration = "لا توجد مدة مقترحة";
+  let strength = "لا يوجد كسر";
+  let duration = "لا توجد صفقة";
 
   if (current > high) {
     decision = "🟢 شراء UP";
-    strength = "قوية نسبيًا";
-    duration = "دقيقتان";
+    strength = "اختراق أعلى الشمعة";
+    duration = "دقيقة واحدة";
   } else if (current < low) {
     decision = "🔴 بيع DOWN";
-    strength = "قوية نسبيًا";
-    duration = "دقيقتان";
-  } else if (change > range * 0.08 && position >= 0.65) {
-    decision = "🟢 شراء UP";
-    strength = "متوسطة";
-    duration = "45 ثانية";
-  } else if (change < -range * 0.08 && position <= 0.35) {
-    decision = "🔴 بيع DOWN";
-    strength = "متوسطة";
-    duration = "45 ثانية";
+    strength = "كسر أسفل الشمعة";
+    duration = "دقيقة واحدة";
   }
 
   const trend =
@@ -89,7 +75,7 @@ function analyzeSmart(data) {
     `💰 السعر الحالي: ${current}\n\n` +
     `📈 الحركة الحالية: ${trend}\n` +
     `🎯 القرار: ${decision}\n` +
-    `💪 قوة الترجيح: ${strength}\n` +
+    `💪 التأكيد: ${strength}\n` +
     `⏱️ المدة المقترحة: ${duration}\n` +
     `📉 الفريم: دقيقة واحدة\n\n` +
     `⚠️ تحليل تقديري وليس ضمانًا للربح.`
@@ -97,31 +83,19 @@ function analyzeSmart(data) {
 }
 
 // ==============================
-// المؤشرات
+// RSI 14
 // ==============================
 
-function calculateEMA(values, period) {
-  const multiplier = 2 / (period + 1);
-
-  let ema = values.slice(0, period)
-    .reduce((sum, value) => sum + value, 0) / period;
-
-  for (let i = period; i < values.length; i++) {
-    ema = (values[i] - ema) * multiplier + ema;
-  }
-
-  return ema;
-}
-
 function calculateRSI(values, period = 14) {
-  if (values.length <= period) return 50;
+  if (values.length <= period) {
+    throw new Error("البيانات غير كافية لحساب RSI.");
+  }
 
   let gains = 0;
   let losses = 0;
 
   for (let i = 1; i <= period; i++) {
     const difference = values[i] - values[i - 1];
-
     if (difference > 0) gains += difference;
     else losses += Math.abs(difference);
   }
@@ -140,111 +114,27 @@ function calculateRSI(values, period = 14) {
   }
 
   if (averageLoss === 0) return 100;
+  if (averageGain === 0) return 0;
 
   const rs = averageGain / averageLoss;
   return 100 - 100 / (1 + rs);
 }
 
 // ==============================
-// فحص الاتجاه والشموع المغلقة
+// بيانات EUR/USD - دقيقة واحدة
 // ==============================
 
-function inspectTrend(candles) {
-  const closes = candles.map(c => Number(c.close));
-
-  if (closes.length < 25) {
-    throw new Error("البيانات غير كافية لحساب المؤشرات.");
-  }
-
-  const ema9 = calculateEMA(closes, 9);
-  const ema21 = calculateEMA(closes, 21);
-  const rsi = calculateRSI(closes, 14);
-
-  const recent = candles.slice(-4);
-  const firstClose = Number(recent[0].close);
-  const last = recent[3];
-  const previous = recent[2];
-
-  const lastClose = Number(last.close);
-  const lastOpen = Number(last.open);
-
-  const lastTwoUp =
-    Number(previous.close) > Number(previous.open) &&
-    lastClose > lastOpen;
-
-  const lastTwoDown =
-    Number(previous.close) < Number(previous.open) &&
-    lastClose < lastOpen;
-
-  let upCandles = 0;
-  let downCandles = 0;
-
-  for (const candle of recent) {
-    if (Number(candle.close) > Number(candle.open)) {
-      upCandles++;
-    }
-
-    if (Number(candle.close) < Number(candle.open)) {
-      downCandles++;
-    }
-  }
-
-  let trend = "متذبذب";
-
-  if (
-    ema9 > ema21 &&
-    lastClose > firstClose &&
-    upCandles >= 3 &&
-    lastTwoUp
-  ) {
-    trend = "صاعد";
-  }
-
-  if (
-    ema9 < ema21 &&
-    lastClose < firstClose &&
-    downCandles >= 3 &&
-    lastTwoDown
-  ) {
-    trend = "هابط";
-  }
-
-  const candleRange = Number(last.high) - Number(last.low);
-  const body = Math.abs(lastClose - lastOpen);
-  const bodyRatio = candleRange > 0 ? body / candleRange : 0;
-
-  return {
-    trend,
-    ema9,
-    ema21,
-    rsi,
-    price: lastClose,
-    candleUp: lastClose > lastOpen,
-    candleDown: lastClose < lastOpen,
-    lastTwoUp,
-    lastTwoDown,
-    bodyRatio,
-    time: last.datetime
-  };
-}
-
-// ==============================
-// بيانات Twelve Data
-// ==============================
-
-async function fetchCandles(interval) {
+async function fetchCandles() {
   const apiKey = process.env.TWELVEDATA_API_KEY;
 
   if (!apiKey) {
     throw new Error("أضف TWELVEDATA_API_KEY في FadeHost.");
   }
 
-  const url = new URL(
-    "https://api.twelvedata.com/time_series"
-  );
+  const url = new URL("https://api.twelvedata.com/time_series");
 
   url.searchParams.set("symbol", "EUR/USD");
-  url.searchParams.set("interval", interval);
+  url.searchParams.set("interval", "1min");
   url.searchParams.set("outputsize", "50");
   url.searchParams.set("apikey", apiKey);
 
@@ -252,9 +142,7 @@ async function fetchCandles(interval) {
   const result = await response.json();
 
   if (!response.ok || result.status === "error" || !result.values) {
-    throw new Error(
-      result.message || "تعذر الحصول على بيانات السوق."
-    );
+    throw new Error(result.message || "تعذر الحصول على بيانات اليورو.");
   }
 
   // استبعاد أحدث شمعة احتياطياً لأنها قد تكون غير مكتملة
@@ -268,61 +156,113 @@ async function fetchCurrentPrice() {
     throw new Error("أضف TWELVEDATA_API_KEY في FadeHost.");
   }
 
-  const url = new URL(
-    "https://api.twelvedata.com/price"
-  );
+  const url = new URL("https://api.twelvedata.com/price");
 
   url.searchParams.set("symbol", "EUR/USD");
   url.searchParams.set("apikey", apiKey);
 
   const response = await fetch(url);
   const result = await response.json();
-
   const price = Number(result.price);
 
   if (!response.ok || !Number.isFinite(price) || price <= 0) {
-    throw new Error(
-      result.message || "تعذر قراءة سعر التقييم."
-    );
+    throw new Error(result.message || "تعذر قراءة السعر الحالي.");
   }
 
   return price;
 }
 
 // ==============================
-// اختيار مدة الإشارة
+// مدة الصفقة
 // ==============================
 
-function chooseDuration(one) {
-  if (
-    one.bodyRatio >= 0.80 &&
-    (
-      (one.trend === "صاعد" && one.rsi >= 62) ||
-      (one.trend === "هابط" && one.rsi <= 38)
-    )
-  ) {
-    return 30;
-  }
-
-  if (
-    one.bodyRatio >= 0.70 &&
-    (
-      (one.trend === "صاعد" && one.rsi >= 60) ||
-      (one.trend === "هابط" && one.rsi <= 40)
-    )
-  ) {
-    return 45;
-  }
-
-  if (one.bodyRatio >= 0.55) {
-    return 60;
-  }
-
+function chooseDuration(bodyRatio) {
+  if (bodyRatio >= 0.80) return 30;
+  if (bodyRatio >= 0.70) return 45;
+  if (bodyRatio >= 0.55) return 60;
   return 120;
 }
 
 // ==============================
-// تقييم الإشارة وحفظ النتيجة
+// تحليل كسر شمعة الدقيقة + RSI
+// ==============================
+
+async function analyzeEurUsd() {
+  const candles = await fetchCandles();
+
+  if (candles.length < 25) {
+    throw new Error("عدد الشموع غير كافٍ للتحليل.");
+  }
+
+  const closes = candles.map(c => Number(c.close));
+  const rsi = calculateRSI(closes, 14);
+
+  // آخر شمعة مكتملة هي الشمعة السابقة
+  const previous = candles[candles.length - 1];
+
+  const high = Number(previous.high);
+  const low = Number(previous.low);
+  const open = Number(previous.open);
+  const close = Number(previous.close);
+
+  const livePrice = await fetchCurrentPrice();
+
+  if (
+    !Number.isFinite(high) ||
+    !Number.isFinite(low) ||
+    high <= low
+  ) {
+    throw new Error("بيانات الشمعة غير صحيحة.");
+  }
+
+  const candleRange = high - low;
+  const bodyRatio = Math.abs(close - open) / candleRange;
+
+  let direction = null;
+  let strength = "غير كافية";
+
+  // شراء: كسر أعلى الشمعة + RSI فوق 50
+  if (livePrice > high && rsi > 50) {
+    direction = "BUY";
+    strength = "كسر صاعد مع تأكيد RSI";
+  }
+
+  // بيع: كسر أسفل الشمعة + RSI تحت 50
+  else if (livePrice < low && rsi < 50) {
+    direction = "SELL";
+    strength = "كسر هابط مع تأكيد RSI";
+  }
+
+  const decision =
+    direction === "BUY" ? "🟢 شراء UP" :
+    direction === "SELL" ? "🔴 بيع DOWN" :
+    "⏸ انتظار";
+
+  const duration = direction ? chooseDuration(bodyRatio) : null;
+
+  const message =
+    `📊 تحليل EUR/USD - Masaad\n\n` +
+    `💰 السعر الحالي: ${livePrice}\n\n` +
+    `🔺 أعلى الشمعة السابقة: ${high}\n` +
+    `🔻 أقل الشمعة السابقة: ${low}\n` +
+    `🕯️ إغلاق الشمعة السابقة: ${close}\n\n` +
+    `📊 RSI 14: ${rsi.toFixed(2)}\n\n` +
+    `🎯 القرار: ${decision}\n` +
+    `💪 قوة الترجيح: ${strength}\n` +
+    `⏱️ المدة المقترحة: ${duration ? duration + " ثانية" : "لا توجد صفقة"}\n` +
+    `📉 الفريم: دقيقة واحدة\n\n` +
+    `⚠️ الإشارة تقديرية وليست مضمونة.`;
+
+  return {
+    message,
+    direction,
+    duration,
+    price: livePrice
+  };
+}
+
+// ==============================
+// تقييم الإشارات
 // ==============================
 
 async function evaluateSignal(signal, bot) {
@@ -370,7 +310,7 @@ async function evaluateSignal(signal, bot) {
       `سعر التقييم: ${exitPrice}\n` +
       `المدة: ${signal.duration} ثانية\n\n` +
       `النتيجة: ${resultText}\n\n` +
-      `⚠️ التقييم حسب Twelve Data وليس سعر ExpertOption OTC.`
+      `⚠️ التقييم بسعر Twelve Data وليس سعر ExpertOption OTC.`
     );
 
   } catch (error) {
@@ -381,8 +321,7 @@ async function evaluateSignal(signal, bot) {
 
     await bot.api.sendMessage(
       signal.chatId,
-      "⚠️ تعذر تقييم الإشارة بسبب مشكلة في جلب السعر.\n" +
-      "لم يتم احتسابها رابحة أو خاسرة."
+      "⚠️ تعذر تقييم الإشارة بسبب مشكلة في جلب السعر."
     ).catch(() => {});
   }
 }
@@ -398,85 +337,7 @@ function restorePendingSignals(bot) {
 }
 
 // ==============================
-// تحليل EUR/USD
-// ==============================
-
-async function analyzeEurUsd() {
-  const [candles1m, candles5m] = await Promise.all([
-    fetchCandles("1min"),
-    fetchCandles("5min")
-  ]);
-
-  const one = inspectTrend(candles1m);
-  const five = inspectTrend(candles5m);
-
-  // السعر الحي وقت التحليل
-  const livePrice = await fetchCurrentPrice();
-
-  let direction = null;
-  let strength = "غير كافية";
-  let duration = null;
-
-  const buyConfirmed =
-    one.trend === "صاعد" &&
-    five.trend === "صاعد" &&
-    one.lastTwoUp &&
-    one.bodyRatio >= 0.55 &&
-    one.ema9 > one.ema21 &&
-    one.rsi >= 55 &&
-    one.rsi <= 65;
-
-  const sellConfirmed =
-    one.trend === "هابط" &&
-    five.trend === "هابط" &&
-    one.lastTwoDown &&
-    one.bodyRatio >= 0.55 &&
-    one.ema9 < one.ema21 &&
-    one.rsi >= 35 &&
-    one.rsi <= 45;
-
-  if (buyConfirmed) {
-    direction = "BUY";
-    strength = "تأكيد فني مشدد";
-  } else if (sellConfirmed) {
-    direction = "SELL";
-    strength = "تأكيد فني مشدد";
-  }
-
-  if (direction) {
-    duration = chooseDuration(one);
-  }
-
-  const decision =
-    direction === "BUY" ? "🟢 شراء UP" :
-    direction === "SELL" ? "🔴 بيع DOWN" :
-    "⏸ انتظار";
-
-  const message =
-    `📊 تحليل EUR/USD - Masaad\n\n` +
-    `💰 السعر: ${livePrice}\n\n` +
-    `📈 اتجاه الدقيقة: ${one.trend}\n` +
-    `📉 اتجاه 5 دقائق: ${five.trend}\n\n` +
-    `EMA 9: ${one.ema9.toFixed(5)}\n` +
-    `EMA 21: ${one.ema21.toFixed(5)}\n` +
-    `RSI: ${one.rsi.toFixed(2)}\n\n` +
-    `🎯 القرار: ${decision}\n` +
-    `💪 قوة الترجيح: ${strength}\n` +
-    `⏱️ المدة المقترحة: ${duration ? duration + " ثانية" : "لا توجد صفقة"}\n\n` +
-    `🕯️ آخر شمعة دقيقة: ${one.time}\n` +
-    `🕯️ آخر شمعة 5 دقائق: ${five.time}\n\n` +
-    `⚠️ إشارة تقديرية وليست مضمونة. بيانات Twelve Data قد تختلف عن ExpertOption OTC.`;
-
-  return {
-    message,
-    direction,
-    duration,
-    price: livePrice
-  };
-}
-
-// ==============================
-// إحصائيات الإشارات
+// الإحصائيات
 // ==============================
 
 async function getStats() {
@@ -486,28 +347,13 @@ async function getStats() {
     ["WIN", "LOSS", "DRAW"].includes(s.result)
   );
 
-  const wins = completed.filter(
-    s => s.result === "WIN"
-  ).length;
-
-  const losses = completed.filter(
-    s => s.result === "LOSS"
-  ).length;
-
-  const draws = completed.filter(
-    s => s.result === "DRAW"
-  ).length;
-
-  const pending = signals.filter(
-    s => s.result === "PENDING"
-  ).length;
-
-  const errors = signals.filter(
-    s => s.result === "ERROR"
-  ).length;
+  const wins = completed.filter(s => s.result === "WIN").length;
+  const losses = completed.filter(s => s.result === "LOSS").length;
+  const draws = completed.filter(s => s.result === "DRAW").length;
+  const pending = signals.filter(s => s.result === "PENDING").length;
+  const errors = signals.filter(s => s.result === "ERROR").length;
 
   const counted = wins + losses;
-
   const accuracy = counted > 0
     ? (wins / counted * 100).toFixed(1)
     : "0.0";
@@ -520,8 +366,7 @@ async function getStats() {
     `⚪ التعادل: ${draws}\n` +
     `⏳ قيد التقييم: ${pending}\n` +
     `⚠️ تعذر تقييمها: ${errors}\n\n` +
-    `📈 نسبة النجاح: ${accuracy}%\n\n` +
-    `ملاحظة: النسبة محسوبة من الإشارات المكتملة فقط، وبأسعار Twelve Data.`
+    `📈 نسبة النجاح: ${accuracy}%`
   );
 }
 
@@ -537,8 +382,8 @@ export function registerCommands(bot) {
 
     await ctx.reply(
       "أهلًا بك في Masaad 🤖\n\n" +
-      "📊 /smart - تحليل Smart اليدوي\n" +
-      "💱 /eurusd - تحليل اليورو تلقائيًا\n" +
+      "📊 /smart - تحليل Smart\n" +
+      "💱 /eurusd - تحليل اليورو دولار\n" +
       "📈 /stats - نتائج الإشارات\n" +
       "📋 /help - المساعدة"
     );
@@ -547,13 +392,14 @@ export function registerCommands(bot) {
   bot.command("help", async ctx => {
     await ctx.reply(
       "📋 أوامر Masaad\n\n" +
-      "/smart - تحليل Smart بإدخال الأسعار\n" +
-      "/eurusd - تحليل EUR/USD\n" +
+      "/smart - تحليل Smart بكسر الشمعة\n" +
+      "/eurusd - تحليل EUR/USD مع RSI 14\n" +
       "/stats - إحصائيات الإشارات\n" +
       "/cancel - إلغاء التحليل اليدوي"
     );
   });
 
+  // Smart
   bot.command("smart", async ctx => {
     sessions.set(ctx.chat.id, {
       type: "smart",
@@ -562,11 +408,12 @@ export function registerCommands(bot) {
     });
 
     await ctx.reply(
-      "📊 بدأ تحليل Smart اليدوي.\n\n" +
+      "📊 تحليل Smart - فريم الدقيقة\n\n" +
       "أرسل أعلى سعر للشمعة السابقة:"
     );
   });
 
+  // EUR/USD
   bot.command("eurusd", async ctx => {
     sessions.delete(ctx.chat.id);
 
@@ -618,6 +465,7 @@ export function registerCommands(bot) {
     await ctx.reply("تم إلغاء التحليل الحالي.");
   });
 
+  // إدخال أسعار Smart
   bot.on("message:text", async ctx => {
     const chatId = ctx.chat.id;
     const text = ctx.message.text.trim();
@@ -636,15 +484,13 @@ export function registerCommands(bot) {
     const price = parsePrice(text);
 
     if (price === null) {
-      await ctx.reply(
-        "⚠️ أرسل سعرًا رقميًا صحيحًا، مثل: 263.643"
-      );
+      await ctx.reply("⚠️ أرسل سعرًا صحيحًا، مثل: 263.643");
       return;
     }
 
     const prompts = [
       "🔻 أرسل أقل سعر للشمعة السابقة:",
-      "🕯️ أرسل سعر افتتاح الشمعة الجديدة:",
+      "🕯️ أرسل افتتاح الشمعة الجديدة:",
       "💰 أرسل السعر الحالي:"
     ];
 
@@ -662,21 +508,15 @@ export function registerCommands(bot) {
     sessions.delete(chatId);
 
     if (session.values.high <= session.values.low) {
-      await ctx.reply(
-        "⚠️ أعلى سعر يجب أن يكون أكبر من أقل سعر.\n" +
-        "أرسل /smart للبدء من جديد."
-      );
+      await ctx.reply("⚠️ أعلى سعر يجب أن يكون أكبر من أقل سعر.");
       return;
     }
 
     if (
       session.values.open > session.values.high ||
-      session.values.open < session.values.low ||
-      session.values.current <= 0
+      session.values.open < session.values.low
     ) {
-      await ctx.reply(
-        "⚠️ تحقق من الأسعار المدخلة وأعد التحليل."
-      );
+      await ctx.reply("⚠️ الافتتاح يجب أن يكون بين أعلى وأقل سعر.");
       return;
     }
 
