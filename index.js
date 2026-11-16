@@ -1,4 +1,3 @@
-
 import { Bot } from "grammy";
 import { registerCommands } from "./commands.js";
 
